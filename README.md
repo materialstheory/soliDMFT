@@ -29,7 +29,7 @@ Please also note that we do not provide user support for using this code.
   invoking  `csc_flow_control` or a one shot calculation directly by invoking
   `dmft_cycle` on a given h5 archive
 - __read_config.py:__ contains the functions to read the dmft config file. Take a
-  look in `read_config_doc.md` for a detailed list of parameters
+  look in `read_config.py` for a detailed list of parameters
 - __dmft_cycle.py:__ contains the `dmft_cycle` function that run a predefined
   number of DMFT iterations
 - __csc_flow.py:__ contains the `csc_flow_control` function to steer the CSC
