@@ -1,0 +1,36 @@
+SYSTEM = LuNiO3
+ENCUT = 500
+NWRITE = 2
+PREC = Normal
+ISPIN = 1   ! no spin=1
+ICHARG=5 ! 5 for fcsc calculations (communication with python)
+ISTART=1
+
+EDIFF = 1.E-06
+ISYM = -1 ! I don't think it works when using symmetries
+NELM=1000 ! to prevent VASP from stopping too early (either because EDIFF is reached or 60 iterations were done)
+NELMIN=1000
+NELMDL=-2 ! first perform 14 iterations to converge the KS wavefunction
+
+!! DOS energy window
+NEDOS = 2001
+!! Smearing procedure
+ISMEAR = -5 ! -4 (-5) Tetrahedron (with Bloechl), 0 Gaussian, 1,... Methfessel-Paxton
+SIGMA=0.01
+!! real/reci projection scheme
+LREAL = .FALSE. ! my master's voice told me to
+!! Algo=Fast/Normal
+ALGO = Normal
+
+NSIM = 2 ! 4 should increase performance
+NCORE = 6
+
+LORBIT=14
+LMAXMIX=6
+EMIN=-1.5
+EMAX=2.5
+LOCPROJ = 5 6 7 8 : d : Pr 1
+
+!! write WAVECAR, CHGCAR
+LWAVE = .FALSE.
+LCHARG = .FALSE.
