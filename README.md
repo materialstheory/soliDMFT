@@ -4,7 +4,7 @@ calculations from h5 archives or VASP input files for multiband systems using
 the TRIQS package, in combination with the CThyb solver and SumkDFT from
 DFT-tools. Runs with both triqs 1.4.2 and triqs 2.0. (https://github.com/TRIQS/)
 
-For one shot calculations one start directly by running `run_dmft.py`, whereas
+For one-shot calculations one starts directly by running `run_dmft.py`, whereas
 for CSC calculations one uses the `vasp_dmft.sh` bash scripts to start both VASP
 and triqs at once.
 
@@ -21,7 +21,7 @@ It is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY;
 without even the implied warranty of MERCHANTABILITY or FITNESS FOR A
 PARTICULAR PURPOSE. See the GNU General Public License for more details.
 
-Please also that we do not provide user support for using this code. 
+Please also note that we do not provide user support for using this code. 
 
 ## source code files
 
@@ -41,7 +41,11 @@ Please also that we do not provide user support for using this code.
 
 ## getting started
 
-To start take a look in the `example` directory. There one finds several
+For one-shot calculations one starts directly by running `run_dmft.py`, whereas
+for CSC calculations one uses the `vasp_dmft.sh` bash scripts to start both VASP
+and triqs at once.
+
+In the `example` directory one finds several
 examples to run. Best start with the svo-one-shot example. The
 `dmft_config.ini` file contains the configuration for the DMFT run, which is
 explained in the read_config method in the main script. The `svo.h5` is the DMFT
