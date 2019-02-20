@@ -51,6 +51,8 @@ def red_to_2ind(uijkl,n_sites,n_orb,out=False):
     U_par = U_mm'^oo = U_mm'mm' - U_mm'm'm (for intersite interaction)
     U_ijij (Hunds coupling)
 
+    the indices in VASP are switched: U_ijkl ---VASP--> U_ikjl 
+
     Parameters
     ----------
     uijkl : numpy array
@@ -83,6 +85,7 @@ def red_to_2ind(uijkl,n_sites,n_orb,out=False):
 
     for i in range(0,n_orb*n_sites):
         for j in range(0,n_orb*n_sites):
+            # the indices in VASP are switched: U_ijkl ---VASP--> U_ikjl
             Uij_anti[i,j] = uijkl[i,i,j,j]
             Uijij[i,j] =  uijkl[i,j,i,j]
             Uijji[i,j] = uijkl[i,j,j,i]

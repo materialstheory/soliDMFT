@@ -1,4 +1,5 @@
 # provides the read_config function to read the config file
+
 import configparser as cp
 import pytriqs.utility.mpi as mpi
 
@@ -88,8 +89,9 @@ def read_config(config_file):
                 removes the complex parts from G0 before the solver runs
     afm_order : bool, optional, default=False
                 copy self energies instead of solving explicitly for afm order
-    set_rot : bool, optional, default=False
-                use density_mat_dft to diagonalize occupations
+    set_rot : string, optional, default='none'
+                use density_mat_dft to diagonalize occupations = 'den'
+                use hloc_dft to diagonalize occupations = 'hloc'
 
     __Solver Parameters:__
     ----------
@@ -282,9 +284,9 @@ def read_config(config_file):
         general_parameters['afm_order'] = False
 
     if 'set_rot' in config['general']:
-        general_parameters['set_rot'] = config['general'].getboolean('set_rot')
+        general_parameters['set_rot'] = str(config['general']['set_rot'])
     else:
-        general_parameters['set_rot'] = False
+        general_parameters['set_rot'] = 'none'
 
     # solver related parameters
     # required parameters

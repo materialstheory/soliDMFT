@@ -338,15 +338,37 @@ def dmft_cycle(general_parameters, solver_parameters, observables):
         density_shell_dft[icrsh] = G_loc_all_dft[icrsh].total_density()
         mpi.report('total density for imp '+str(icrsh)+' from DFT: '+str(density_shell_dft[icrsh]))
 
-    # extracting new rotation matrices from previous density_mat
-    if general_parameters['set_rot'] and iteration_offset == 0:
-        for icrsh in range(SK.n_inequiv_shells):
-            eigval, eigvec = numpy.linalg.eigh(np.real(density_mat_dft[icrsh]['up_0']))
+    # extracting new rotation matrices from density_mat or local Hamiltonian
+    if (general_parameters['set_rot'] == 'hloc' or general_parameters['set_rot'] == 'den') and iteration_offset == 0:
+        if general_parameters['set_rot'] == 'hloc':
+            q_diag = SK.eff_atomic_levels()
+        elif general_parameters['set_rot'] == 'den':
+            q_diag = density_mat_dft
+
+        rot_mat = []
+        for icrsh in range(SK.n_corr_shells):
+            ish = SK.corr_to_inequiv[icrsh]
+            eigval, eigvec = numpy.linalg.eigh(np.real(q_diag[ish]['up_0']))
             rot_mat_local = numpy.array(eigvec) + 0.j
 
-        rot_mat = [rot_mat_local for icrsh in range(SK.n_corr_shells)]
+            rot_mat.append(rot_mat_local)
+
         SK.rot_mat = rot_mat
-        mpi.report('Updating rotation matrices using dft eigenbasis to maximise sign')
+        mpi.report('Updating rotation matrices using dft %s eigenbasis to maximise sign'%(general_parameters['set_rot']))
+
+        if mpi.is_master_node():
+            print "\n new rotation matrices "
+            # rotation matrices
+            for icrsh in range(SK.n_corr_shells):
+                n_orb = SK.corr_shells[icrsh]['dim']
+                print 'rot_mat[%2d] '%(icrsh)+'real part'.center(9*n_orb)+'  '+'imaginary part'.center(9*n_orb)
+                rot = np.matrix( SK.rot_mat[icrsh] )
+                for irow in range(n_orb):
+                    fmt = '{:9.5f}' * n_orb
+                    row = np.real(rot[irow,:]).tolist()[0] + np.imag(rot[irow,:]).tolist()[0]
+                    print ('           '+fmt+'  '+fmt).format(*row)
+
+            print '\n'
 
     # saving rot mat to h5 archive:
     if mpi.is_master_node() and iteration_offset == 0:

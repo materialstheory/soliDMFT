@@ -12,7 +12,6 @@ thesis of Merzuk Kaltak (http://othes.univie.ac.at/38099/).
 ## file description
  * `eval_U.py` extraction of Coulomb tensor, calculation of reduced two-index matrices, and calculation of Kanamori or Slater parameters
  * `ext_eps.sh` a small bash script that can extract $\epsilon^-1(|q+G|)=[1-VP^r]^-1$ from a given vasprun.xml file
- * `notations_of_Uijkl in VASP.pdf` general remarks on the notation of the Coulomb tensor in VASP
 
 ## Workflow:
 1. DFT NM normal like:
@@ -89,7 +88,8 @@ bands must be used. A good choice is 3*NELECT (# of electrons in the systems).
 The procedure is then to first convergence KPOINTS and ENCUT, where KPOINTS dependency of the results seems to be weak. Then increase NBANDS until U does not change anymore.
 
 ## general sidemarks:
-* careful with the averaged U,u,J values, because they sum all off-diagonal elements! Also inter-site, if the unit cell contains more than one target atom
+* careful with the averaged U,u,J values in the end of the OUTCAR, because they sum all off-diagonal elements! Also inter-site, if the unit cell contains more than one target atom
+* in VASP the two inner indices are exchanged compared to the notation in PRB 86, 165105 (2012): U_ijkl = U_ikjl^VASP
 * when specifying bands, always start with 1 not 0.
 * GW pseudopotentials can be more accurate, since they provide higher cut-offs e.g. , test this...
 * NCRPALOW/HIGH and NTARGET_STATES gives the same result in non-entangled bands
