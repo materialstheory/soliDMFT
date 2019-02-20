@@ -342,13 +342,15 @@ def dmft_cycle(general_parameters, solver_parameters, observables):
     if (general_parameters['set_rot'] == 'hloc' or general_parameters['set_rot'] == 'den') and iteration_offset == 0:
         if general_parameters['set_rot'] == 'hloc':
             q_diag = SK.eff_atomic_levels()
+            chnl = 'up'
         elif general_parameters['set_rot'] == 'den':
             q_diag = density_mat_dft
+            chnl = 'up_0'
 
         rot_mat = []
         for icrsh in range(SK.n_corr_shells):
             ish = SK.corr_to_inequiv[icrsh]
-            eigval, eigvec = numpy.linalg.eigh(np.real(q_diag[ish]['up_0']))
+            eigval, eigvec = numpy.linalg.eigh(np.real(q_diag[ish][chnl]))
             rot_mat_local = numpy.array(eigvec) + 0.j
 
             rot_mat.append(rot_mat_local)
