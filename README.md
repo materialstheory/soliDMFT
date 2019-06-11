@@ -75,7 +75,7 @@ docker run --rm -it -u $(id -u) -v ~/git/uni-dmft:/work materialstheory/triqs ba
 the more elaborate version of the Docker container found in this repo in the
 folder `Docker` can be best started as:
 ```
-docker run --rm -it -e USER_ID=`id -u` -e GROUP_ID=`id -g` -p 8378:8378 -v $PWD:/work -v ~/git/uni-dmft:/uni-dmft triqs_vasp_csc bash
+docker run --rm -it --shm-size=4g -e USER_ID=`id -u` -e GROUP_ID=`id -g` -p 8378:8378 -v $PWD:/work -v ~/git/uni-dmft:/uni-dmft triqs_vasp_csc bash
 ```
 where the `-e` flags will translate your current user and group id into the
 container and make sure writing permissions are correct for the mounted volumes.
