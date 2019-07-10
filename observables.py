@@ -494,7 +494,7 @@ def calc_dft_kin_en(general_parameters, SK, dft_mu):
         # calculate G(beta) via the function density, which is the same as fourier trafo G(w) and taking G(b)
         G_iw_lat_beta = G_iw_lat.density()
         # Doing the formula
-        E_kin += np.trace(H_ks[ik,0,:nb,:nb] * G_iw_lat_beta['up'][:,:]) + np.trace(H_ks[ik,0,:nb,:nb] * G_iw_lat_beta['down'][:,:])
+        E_kin += np.trace(np.dot(H_ks[ik,0,:nb,:nb],G_iw_lat_beta['up'][:,:])) + np.trace(np.dot(H_ks[ik,0,:nb,:nb],G_iw_lat_beta['down'][:,:]))
     E_kin = float(E_kin.real)
 
     # collect data and put into E_kin_dft
@@ -543,7 +543,7 @@ def calc_bandcorr_man(general_parameters, SK, E_kin_dft):
         # calculate G(beta) via the function density, which is the same as fourier trafo G(w) and taking G(b)
         G_iw_lat_beta = G_iw_lat.density()
         # Doing the formula
-        E_kin += np.trace(H_ks[ik,0,:nb,:nb] * G_iw_lat_beta['up'][:,:]) + np.trace(H_ks[ik,0,:nb,:nb] * G_iw_lat_beta['down'][:,:])
+        E_kin += np.trace(np.dot(H_ks[ik,0,:nb,:nb],G_iw_lat_beta['up'][:,:])) + np.trace(np.dot(H_ks[ik,0,:nb,:nb],G_iw_lat_beta['down'][:,:]))
     E_kin = float(E_kin.real)
 
     # collect data and put into E_kin_dmft
