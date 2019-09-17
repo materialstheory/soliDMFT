@@ -4,6 +4,7 @@ NWRITE = 2
 PREC = Normal
 ISPIN = 1   ! no spin=1
 ICHARG=5 ! 5 for fcsc calculations (communication with python)
+IMIX=0
 
 EDIFF = 1.E-06
 ISYM = -1 ! I don't think it works when using symmetries

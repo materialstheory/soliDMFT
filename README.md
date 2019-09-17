@@ -21,7 +21,7 @@ It is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY;
 without even the implied warranty of MERCHANTABILITY or FITNESS FOR A
 PARTICULAR PURPOSE. See the GNU General Public License for more details.
 
-Please also note that we do not provide user support for this code. 
+Please also note that we do not provide user support for this code.
 
 ## source code files
 
@@ -158,3 +158,4 @@ which did the job.
   30%! However, originally I added a copy of the file `GAMMA` to `GAMMA.old` to
   keep the original GAMMA file from DMFT. This is not needed now anymore and I
   removed the `shutil` copy call in our python code.
+- make sure that mixing in VASP is turned of IMIX=0
