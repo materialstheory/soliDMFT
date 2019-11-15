@@ -1,4 +1,6 @@
 # provides the read_config function to read the config file
+# doc is created with https://github.com/freeman-lab/myopts
+# using the command: myopts read_config.py -o doc.md -s false
 
 import configparser as cp
 import pytriqs.utility.mpi as mpi
@@ -38,7 +40,10 @@ def read_config(config_file):
     n_iter_dft : int, optional, default = 8
                 number of dft iterations per cycle
     dc_type : int
+                0: FLL
                 1: held formula, needs to be used with slater-kanamori h_int_type=2
+                2: AMF
+                3: FLL for eg orbitals only with U,J for Kanamori
     prec_mu : float
                 general precision for determining the chemical potential at any time calc_mu is called
     dc_dmft : bool
@@ -107,17 +112,20 @@ def read_config(config_file):
                 maximum amount the solver is allowed to spend in eacht iteration
     imag_threshold : float, optional, default= 10e-15
                 thresold for imag part of G0_tau. be warned if symmetries are off in projection scheme imag parts can occur in G0_tau
+    measure_density_matrix : bool, optional, default=False
+                measures the impurity density matrix and sets also
+                use_norm_as_weight to true
     measure_g_tau : bool,optional, default=True
                 should the solver measure G(tau)?
     move_double : bool, optional, default=True
                 double moves in solver
     perform_tail_fit : bool, optional, default=False
                 tail fitting if legendre is off?
-    fit_max_moment : int, needed if perform_tail_fit = true
+    fit_max_moment : int, optional
                 max moment to be fitted
-    fit_min_n : int, needed if perform_tail_fit = true
+    fit_min_n : int, optional
                 number of start matsubara frequency to start with
-    fit_max_n : int, needed if perform_tail_fit = true
+    fit_max_n : int, optional
                 number of highest matsubara frequency to fit
 
     __Returns:__
@@ -307,6 +315,13 @@ def read_config(config_file):
     else:
         solver_parameters["measure_G_tau"] = True
 
+    if 'measure_density_matrix' in config['solver_parameters']:
+        solver_parameters["measure_density_matrix"] = config['solver_parameters'].getboolean('measure_density_matrix')
+        # also required to measure the density matrix
+        solver_parameters["use_norm_as_weight"] = True
+    else:
+        solver_parameters["measure_density_matrix"] = False
+
     if 'move_double' in config['solver_parameters']:
         solver_parameters["move_double"] = config['solver_parameters'].getboolean('move_double')
     else:
@@ -322,9 +337,14 @@ def read_config(config_file):
             solver_parameters["perform_tail_fit"] = config['solver_parameters'].getboolean('perform_tail_fit')
         else:
             solver_parameters["perform_tail_fit"] = False
-    if solver_parameters["perform_tail_fit"] == True:
+
+    if 'fit_max_moment' in config['solver_parameters']:
         solver_parameters["fit_max_moment"] = int(config['solver_parameters']['fit_max_moment'])
+
+    if 'fit_min_n' in config['solver_parameters']:
         solver_parameters["fit_min_n"] = int(config['solver_parameters']['fit_min_n'])
+
+    if 'fit_max_n' in config['solver_parameters']:
         solver_parameters["fit_max_n"] = int(config['solver_parameters']['fit_max_n'])
 
     return general_parameters,solver_parameters

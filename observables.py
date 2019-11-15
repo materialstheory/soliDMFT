@@ -11,17 +11,11 @@ import numpy as np
 
 # triqs
 import pytriqs.utility.mpi as mpi
-from pytriqs.operators.util import *
-from pytriqs.archive import HDFArchive
 try:
     # TRIQS 2.0
-    from triqs_cthyb import *
-    from triqs_dft_tools.sumk_dft import *
-    from triqs_dft_tools.sumk_dft_tools import *
-    from triqs_dft_tools.converters.vasp_converter import *
-    from triqs_dft_tools.converters.plovasp.vaspio import VaspData
-    import triqs_dft_tools.converters.plovasp.converter as plo_converter
-    from pytriqs.gf import *
+    from pytriqs.gf import GfImTime
+    from pytriqs.atom_diag import trace_rho_op
+    from pytriqs.gf.descriptors import InverseFourier
 except ImportError:
     # TRIQS 1.4
     from pytriqs.applications.impurity_solvers.cthyb import *
@@ -31,6 +25,7 @@ except ImportError:
     from pytriqs.applications.dft.converters.plovasp.vaspio import VaspData
     import pytriqs.applications.dft.converters.plovasp.converter as plo_converter
     from pytriqs.gf.local import *
+    
 
 def prep_observables(general_parameters, h5_archive):
     """
@@ -66,6 +61,7 @@ def prep_observables(general_parameters, h5_archive):
         observables['E_tot'] = []
         observables['E_bandcorr'] = []
         observables['E_int'] = []
+        observables['E_int_rho'] = []
         observables['E_corr_en'] = []
         observables['E_dft'] = []
         observables['E_DC'] = []
@@ -73,10 +69,17 @@ def prep_observables(general_parameters, h5_archive):
         observables['imp_gb2'] = []
         observables['orb_occ'] = []
         observables['imp_occ'] = []
+        observables['rho'] = []
+        observables['h_loc'] = []
+        observables['h_loc_diag'] = []
         for icrsh in range(0,n_inequiv_shells):
 
             observables['E_int'].append([])
+            observables['E_int_rho'].append([])
             observables['E_DC'].append([])
+            observables['rho'].append([])
+            observables['h_loc'].append([])
+            observables['h_loc_diag'].append([])
             observables['orb_gb2'].append({'up': [], 'down': []})
             observables['imp_gb2'].append({'up': [], 'down': []})
             observables['orb_occ'].append({'up': [], 'down': []})
@@ -113,9 +116,9 @@ def prepare_obs_files(general_parameters,n_inequiv_shells):
 
     for icrsh in range(n_inequiv_shells):
         if general_parameters['magnetic']:
-            print 'observables for impurity '+str(icrsh)+' are written to file observables_imp'+str(icrsh)+'_up.dat and _down.dat'
+            print('observables for impurity '+str(icrsh)+' are written to file observables_imp'+str(icrsh)+'_up.dat and _down.dat')
         else:
-            print 'observables for impurity '+str(icrsh)+' are written to file observables_imp'+str(icrsh)+'.dat'
+            print('observables for impurity '+str(icrsh)+' are written to file observables_imp'+str(icrsh)+'.dat')
         # only print header if no previous iterations are found
 
         # if magnetic calculation is done create two obs files per imp
@@ -148,7 +151,7 @@ def prepare_obs_files(general_parameters,n_inequiv_shells):
 
     return
 
-def calc_obs(observables, general_parameters, it, S, dft_mu, previous_mu, SK, G_loc_all_dft, density_mat_dft, density_mat, shell_multiplicity, E_dft, E_bandcorr, E_int, E_corr_en):
+def calc_obs(observables, general_parameters, solver_parameters, it, S, h_int, dft_mu, previous_mu, SK, G_loc_all_dft, density_mat_dft, density_mat, shell_multiplicity, E_dft, E_bandcorr, E_int, E_corr_en):
     """
     calculates the observables for given Input, I decided to calculate the observables
     not adhoc since it should be done only once by the master_node
@@ -159,9 +162,13 @@ def calc_obs(observables, general_parameters, it, S, dft_mu, previous_mu, SK, G_
 
     general_parameters : general parameters as a dict
 
+    solver_parameters : solver parameters as a dict
+
     it : iteration counter
 
     S : Solver instances
+
+    h_int : interaction hamiltonian
 
     dft_mu : dft chemical potential
 
@@ -202,6 +209,7 @@ def calc_obs(observables, general_parameters, it, S, dft_mu, previous_mu, SK, G_
         for icrsh in range(0,SK.n_inequiv_shells):
             # determine number of orbitals per shell
             observables['E_int'][icrsh].append(0.0)
+            observables['E_int_rho'][icrsh].append(0.0)
             if (general_parameters['dc_type'] >= 0):
                 observables['E_DC'][icrsh].append(shell_multiplicity[icrsh]*SK.dc_energ[SK.inequiv_to_corr[icrsh]])
             else:
@@ -295,6 +303,24 @@ def calc_obs(observables, general_parameters, it, S, dft_mu, previous_mu, SK, G_
         occ_imp_down = 0.0
         occ_orb_up = []
         occ_orb_down = []
+
+        # if density matrix was measured store result in observables
+        if solver_parameters["measure_density_matrix"] and mpi.is_master_node():
+            mpi.report("\nextracting the impurity density matrix")
+            # Extract accumulated density matrix
+            observables["rho"][icrsh].append( S[icrsh].density_matrix )
+
+            # storing the local Hamiltonian
+            observables["h_loc"][icrsh].append( S[icrsh].h_loc )
+
+            # Object containing eigensystem of the local Hamiltonian
+            observables["h_loc_diag"][icrsh].append( S[icrsh].h_loc_diagonalization )
+
+            E_h_int = trace_rho_op(observables["rho"][icrsh][-1],
+                                    h_int[icrsh],
+                                    observables["h_loc_diag"][icrsh][-1])
+
+            observables['E_int_rho'][icrsh].append(float(shell_multiplicity[icrsh]*E_h_int))
 
         # iterate over all spin channels and add the to up or down
         for spin_channel, elem in SK.gf_struct_solver[icrsh].iteritems():
@@ -504,7 +530,7 @@ def calc_dft_kin_en(general_parameters, SK, dft_mu):
     E_kin_dft = E_kin_dft/num_kpts
 
     if mpi.is_master_node():
-        print 'Kinetic energy contribution dft part: '+str(E_kin_dft)
+        print('Kinetic energy contribution dft part: '+str(E_kin_dft))
 
     return E_kin_dft
 
@@ -553,7 +579,7 @@ def calc_bandcorr_man(general_parameters, SK, E_kin_dft):
     E_kin_dmft = E_kin_dmft/num_kpts
 
     if mpi.is_master_node():
-        print 'Kinetic energy contribution dmft part: '+str(E_kin_dmft)
+        print('Kinetic energy contribution dmft part: '+str(E_kin_dmft))
 
     E_bandcorr = E_kin_dmft - E_kin_dft
 

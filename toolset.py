@@ -8,21 +8,20 @@
 # determine_block_structure
 # load_sigma_from_h5
 
-import errno
+#import errno
 import numpy as np
+import os
 
 # triqs
 import pytriqs.utility.mpi as mpi
+from pytriqs.archive import HDFArchive
 try:
     # TRIQS 2.0
-    from triqs_dft_tools.sumk_dft import *
-    from triqs_dft_tools.sumk_dft_tools import *
+    from triqs_dft_tools.converters.plovasp.vaspio import VaspData
 except ImportError:
     # TRIQS 1.4
-    from pytriqs.applications.dft.sumk_dft import *
-    from pytriqs.applications.dft.sumk_dft_tools import *
+    from pytriqs.applications.dft.converters.plovasp.vaspio import VaspData
 
-from observables import *
 
 def is_vasp_lock_present():
     """
@@ -65,7 +64,7 @@ def get_dft_energy():
     try:
         dft_energy = float(line.split()[2])
     except ValueError:
-        print "Cannot read energy from OSZICAR, setting it to zero"
+        print("Cannot read energy from OSZICAR, setting it to zero")
         dft_energy = 0.0
     return dft_energy
 
@@ -78,7 +77,7 @@ def get_dft_mu():
     try:
         fermi_energy = float(line.split()[4])
     except ValueError:
-        print "Cannot read energy from OSZICAR, setting it to zero"
+        print("Cannot read energy from OSZICAR, setting it to zero")
         fermi_energy = 0.0
     return fermi_energy
 
@@ -107,8 +106,8 @@ def check_convergence(SK,general_parameters,observables):
     converged = False
     iterations = general_parameters['occ_conv_it']
 
-    print "="*60
-    print 'checking covergence of the last '+str(iterations)+' iterations:'
+    print("="*60)
+    print('checking covergence of the last '+str(iterations)+' iterations:')
     #loading the observables file
     avg_occ = []
     std_dev = []
@@ -123,14 +122,14 @@ def check_convergence(SK,general_parameters,observables):
 
         avg_occ.append(mean)
         std_dev.append(std)
-        print 'Average occupation of impurity '+str(icrsh)+': '+"{:10.5f}".format(avg_occ[icrsh])
-        print 'Standard deviation of impurity '+str(icrsh)+': '+"{:10.5f}".format(std_dev[icrsh])
+        print('Average occupation of impurity '+str(icrsh)+': '+"{:10.5f}".format(avg_occ[icrsh]))
+        print('Standard deviation of impurity '+str(icrsh)+': '+"{:10.5f}".format(std_dev[icrsh]))
 
     if all(i < general_parameters['occ_conv_crit'] for i in std_dev) == True:
         converged = True
 
-    print "="*60
-    print
+    print("="*60)
+    print('')
 
     return converged, std_dev
 
@@ -192,31 +191,31 @@ def determine_block_structure(SK, general_parameters):
     # Summary of block structure finder and determination of shell_multiplicity
     shell_multiplicity = [0 for icrsh in range(SK.n_inequiv_shells)]
     if mpi.is_master_node():
-        print "\n number of ineq. correlated shells: %d"%(SK.n_inequiv_shells)
+        print("\n number of ineq. correlated shells: %d"%(SK.n_inequiv_shells))
         # correlated shells and their structure
-        print "\n block structure summary"
+        print("\n block structure summary")
         for icrsh in range(SK.n_inequiv_shells):
             shlst = []
             for ish in range(SK.n_corr_shells):
                 if SK.corr_to_inequiv[ish] == icrsh: shlst.append(ish)
             shell_multiplicity[icrsh] = len(shlst)
-            print " -- Shell type #%3d : "%icrsh + format(shlst)
-            print "  | shell multiplicity "+str(shell_multiplicity[icrsh])
-            print "  | block struct. : " + format(SK.gf_struct_solver[icrsh])
-            print "  | deg. orbitals : " + format(SK.deg_shells[icrsh])
+            print(" -- Shell type #%3d : "%icrsh + format(shlst))
+            print("  | shell multiplicity "+str(shell_multiplicity[icrsh]))
+            print("  | block struct. : " + format(SK.gf_struct_solver[icrsh]))
+            print("  | deg. orbitals : " + format(SK.deg_shells[icrsh]))
 
-        print "\n rotation matrices "
+        print("\n rotation matrices ")
         # rotation matrices
         for icrsh in range(SK.n_corr_shells):
             n_orb = SK.corr_shells[icrsh]['dim']
-            print 'rot_mat[%2d] '%(icrsh)+'real part'.center(9*n_orb)+'  '+'imaginary part'.center(9*n_orb)
+            print('rot_mat[%2d] '%(icrsh)+'real part'.center(9*n_orb)+'  '+'imaginary part'.center(9*n_orb))
             rot = np.matrix( SK.rot_mat[icrsh] )
             for irow in range(n_orb):
                 fmt = '{:9.5f}' * n_orb
                 row = np.real(rot[irow,:]).tolist()[0] + np.imag(rot[irow,:]).tolist()[0]
-                print ('           '+fmt+'  '+fmt).format(*row)
+                print(('           '+fmt+'  '+fmt).format(*row))
 
-        print '\n'
+        print('\n')
 
     shell_multiplicity = mpi.bcast(shell_multiplicity)
 
@@ -226,31 +225,31 @@ def print_block_sym(SK, shell_multiplicity):
     # Summary of block structure finder and determination of shell_multiplicity
     shell_multiplicity = [0 for icrsh in range(SK.n_inequiv_shells)]
     if mpi.is_master_node():
-        print "\n number of ineq. correlated shells: %d"%(SK.n_inequiv_shells)
+        print("\n number of ineq. correlated shells: %d"%(SK.n_inequiv_shells))
         # correlated shells and their structure
-        print "\n block structure summary"
+        print("\n block structure summary")
         for icrsh in range(SK.n_inequiv_shells):
             shlst = []
             for ish in range(SK.n_corr_shells):
                 if SK.corr_to_inequiv[ish] == icrsh: shlst.append(ish)
             shell_multiplicity[icrsh] = len(shlst)
-            print " -- Shell type #%3d : "%icrsh + format(shlst)
-            print "  | shell multiplicity "+str(shell_multiplicity[icrsh])
-            print "  | block struct. : " + format(SK.gf_struct_solver[icrsh])
-            print "  | deg. orbitals : " + format(SK.deg_shells[icrsh])
+            print(" -- Shell type #%3d : "%icrsh + format(shlst))
+            print("  | shell multiplicity "+str(shell_multiplicity[icrsh]))
+            print("  | block struct. : " + format(SK.gf_struct_solver[icrsh]))
+            print("  | deg. orbitals : " + format(SK.deg_shells[icrsh]))
 
-        print "\n rotation matrices "
+        print("\n rotation matrices ")
         # rotation matrices
         for icrsh in range(SK.n_corr_shells):
             n_orb = SK.corr_shells[icrsh]['dim']
-            print 'rot_mat[%2d] '%(icrsh)+'real part'.center(9*n_orb)+'  '+'imaginary part'.center(9*n_orb)
+            print('rot_mat[%2d] '%(icrsh)+'real part'.center(9*n_orb)+'  '+'imaginary part'.center(9*n_orb))
             rot = np.matrix( SK.rot_mat[icrsh] )
             for irow in range(n_orb):
                 fmt = '{:9.5f}' * n_orb
                 row = np.real(rot[irow,:]).tolist()[0] + np.imag(rot[irow,:]).tolist()[0]
-                print ('           '+fmt+'  '+fmt).format(*row)
+                print(('           '+fmt+'  '+fmt).format(*row))
 
-        print '\n'
+        print('\n')
 
 def load_sigma_from_h5(path_to_h5, iteration):
     """
@@ -274,9 +273,10 @@ def load_sigma_from_h5(path_to_h5, iteration):
     self_energies = []
 
     old_calc = HDFArchive(path_to_h5,'r')
+
     if iteration == -1:
         for icrsh in range(old_calc['dft_input']['n_inequiv_shells']):
-            print 'loading Sigma_imp'+str(icrsh)+' at last iteration from '+path_to_h5
+            print('loading Sigma_imp'+str(icrsh)+' at last iteration from '+path_to_h5)
             self_energies.append(old_calc['DMFT_results']['last_iter']['Sigma_iw_'+str(icrsh)])
 
         # loading DC from this iteration as well!
@@ -284,7 +284,7 @@ def load_sigma_from_h5(path_to_h5, iteration):
         dc_energ = old_calc['DMFT_results']['last_iter']['DC_energ']
     else:
         for icrsh in range(old_calc['dft_input']['n_inequiv_shells']):
-            print 'loading Sigma_imp'+str(icrsh)+' at it '+str(iteration)+' from '+path_to_h5
+            print('loading Sigma_imp'+str(icrsh)+' at it '+str(iteration)+' from '+path_to_h5)
             self_energies.append(old_calc['DMFT_results']['it_'+str(iteration)]['Sigma_iw_'+str(icrsh)])
 
         # loading DC from this iteration as well!

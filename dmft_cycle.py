@@ -6,25 +6,20 @@ import warnings
 warnings.simplefilter(action='ignore', category=FutureWarning)
 
 # system
-import os.path
-import os
 import numpy as np
-import errno
-import re
 
 # triqs
 import pytriqs.utility.mpi as mpi
-from pytriqs.operators.util import *
+from pytriqs.operators.util.U_matrix import U_matrix, U_matrix_kanamori, reduce_4index_to_2index
+from pytriqs.operators.util.hamiltonians import h_int_kanamori, h_int_slater, h_int_density
 from pytriqs.archive import HDFArchive
 try:
     # TRIQS 2.0
-    from triqs_cthyb import *
-    from triqs_dft_tools.sumk_dft import *
-    from triqs_dft_tools.sumk_dft_tools import *
-    from triqs_dft_tools.converters.vasp_converter import *
-    from triqs_dft_tools.converters.plovasp.vaspio import VaspData
-    import triqs_dft_tools.converters.plovasp.converter as plo_converter
-    from pytriqs.gf import *
+    from triqs_cthyb.solver import Solver
+    from triqs_dft_tools.sumk_dft import SumkDFT
+    from pytriqs.gf import GfImTime, GfLegendre, BlockGf
+    from pytriqs.gf.tools import inverse
+    from pytriqs.gf.descriptors import Fourier, InverseFourier
     legacy_mode = False
 except ImportError:
     # TRIQS 1.4
@@ -38,8 +33,8 @@ except ImportError:
     legacy_mode = True
 
 # own modules
-from observables import *
-import toolset as toolset
+from observables import calc_dft_kin_en, calc_obs, calc_bandcorr_man, write_obs
+import toolset
 
 def dmft_cycle(general_parameters, solver_parameters, observables):
     """
@@ -85,17 +80,23 @@ def dmft_cycle(general_parameters, solver_parameters, observables):
 
     iteration_offset = mpi.bcast(iteration_offset)
 
-    mpi.barrier()
+    if iteration_offset == 0 and dft_mu != 0.0:
+        SK.chemical_potential = dft_mu
+        mpi.report("\n chemical potential set to "+str(SK.chemical_potential)+" eV \n")
+
 
     # determine block structure for solver
     det_blocks = True
     shell_multiplicity = []
+    deg_shells = []
     # load previous block_structure if possible
     if mpi.is_master_node():
         if 'block_structure' in ar['DMFT_input']:
             det_blocks = False
             shell_multiplicity = ar['DMFT_input']['shell_multiplicity']
+            deg_shells = ar['DMFT_input']['deg_shells']
     det_blocks = mpi.bcast(det_blocks)
+    deg_shells = mpi.bcast(deg_shells)
     shell_multiplicity = mpi.bcast(shell_multiplicity)
 
     # if we are not doing a CSC calculation we need to have a DFT mu value
@@ -105,12 +106,37 @@ def dmft_cycle(general_parameters, solver_parameters, observables):
         dft_mu = SK.calc_mu( precision = general_parameters['prec_mu'] )
 
     # determine block structure for GF and Hyb function
-    if det_blocks:
+    if det_blocks and not general_parameters['load_sigma']:
         SK, shell_multiplicity = toolset.determine_block_structure(SK, general_parameters)
+    # if load sigma we need to load everything from this h5 archive
+    elif general_parameters['load_sigma']:
+        deg_shells = []
+        # loading shell_multiplicity
+        if mpi.is_master_node():
+            old_calc = HDFArchive(general_parameters['path_to_sigma'],'r')
+            shell_multiplicity = old_calc['DMFT_input']['shell_multiplicity']
+            deg_shells = old_calc['DMFT_input']['deg_shells']
+            del old_calc
+        shell_multiplicity = mpi.bcast(shell_multiplicity)
+        deg_shells = mpi.bcast(deg_shells)
+        #loading block_struc and rot mat
+        SK_old = SumkDFT(hdf_file = general_parameters['path_to_sigma'])
+        SK_old.read_input_from_hdf(subgrp='DMFT_input',things_to_read=['block_structure','rot_mat'])
+        SK.block_structure = SK_old.block_structure
+        if general_parameters['magnetic']:
+            SK.deg_shells = [[] for icrsh in range(0,SK.n_inequiv_shells)]
+        else:
+            SK.deg_shells = deg_shells
+        SK.rot_mat = SK_old.rot_mat
+        toolset.print_block_sym(SK, shell_multiplicity)
     else:
         SK.read_input_from_hdf(subgrp='DMFT_input',things_to_read=['block_structure','rot_mat'])
+        SK.deg_shells = deg_shells
         toolset.print_block_sym(SK, shell_multiplicity)
 
+    # for CSC calculations this does not work
+    if general_parameters['magnetic'] and not general_parameters['csc']:
+        SK.SP = 1
     # if we do AFM calculation we can use symmetry to copy self-energies from
     # one imp to another by exchanging up/down channels for speed up and accuracy
     afm_mapping = []
@@ -149,12 +175,12 @@ def dmft_cycle(general_parameters, solver_parameters, observables):
                     afm_mapping.append([False,icrsh,False])
 
 
-            print 'AFM calculation selected, mapping self energies as follows:'
-            print 'imp  [copy sigma, source imp, switch up/down]'
-            print '---------------------------------------------'
+            print('AFM calculation selected, mapping self energies as follows:')
+            print('imp  [copy sigma, source imp, switch up/down]')
+            print('---------------------------------------------')
             for i,elem in enumerate(afm_mapping):
-                print str(i)+' ', elem
-            print ''
+                print(str(i)+' ', elem)
+            print('')
 
             ar['DMFT_input']['afm_mapping'] = afm_mapping
 
@@ -197,30 +223,27 @@ def dmft_cycle(general_parameters, solver_parameters, observables):
         ish = SK.inequiv_to_corr[icrsh]
         n_orb = SK.corr_shells[ish]['dim']
         l = SK.corr_shells[ish]['l']
-        orb_names = [i for i in range(n_orb)]
+        orb_names = list(range(n_orb))
 
         # Construct U matrix of general kanamori type calculations
         if n_orb == 2 or n_orb == 3: # e_g or t_2g cases
             Umat, Upmat = U_matrix_kanamori(n_orb=n_orb, U_int=general_parameters['U'][icrsh], J_hund=general_parameters['J'][icrsh])
         elif n_orb == 5:
+            # This is correct when used with the density-density Hamiltonian
+            # Calculation of F0, F2, F4 from doi.org/10.1103/PhysRevB.90.165105
             R = 0.63 # SumkDFT value for F4/F2
             F2 = 49.0 / (3.0 + 20.0/9.0 * R) * general_parameters['J'][icrsh]
             F4 = R * F2
-            Javg = (F2 + F4)/14.0
-            Uavg = general_parameters['U'][icrsh] - 8.0/7.0 * Javg
-            F0 = Uavg
-            Umat_full = U_matrix(l=2, U_int=Uavg, J_hund=Javg, basis='other', T=T)
+            F0 = general_parameters['U'][icrsh] - 4./49. * (F2 + F4)
+
+            Umat_full = U_matrix(l=2, radial_integrals=[F0, F2, F4], basis='cubic')
             # reduce full 4-index interaction matrix to 2-index
             Umat, Upmat = reduce_4index_to_2index(Umat_full)
-            fmt = '{:9.5f}' * n_orb
             if mpi.is_master_node():
-                print '\nUav =%9.4f, Jav =%9.4f, F4/F2 =%9.4f'%(Uavg,Javg,R)
-                print   'F0  =%9.4f, F2  =%9.4f, F4    =%9.4f'%(F0,F2,F4)
-                print 'Transformation matrix from [Y_lm (l=2, m=-2,...,2)] to ' + str(orb_names_d)
-                print '       ' + 'real part'.center(9*n_orb)+'  '+'imaginary part'.center(9*n_orb)
-                for irow in range(n_orb):
-                    row = [orb_names_d[irow]] + numpy.real(T[irow,:]).tolist() + numpy.imag(T[irow,:]).tolist()
-                    print ('{:7s}' + fmt+'  '+fmt).format(*row)
+                Uavg = F0
+                Javg = (F2 + F4)/14.0
+                print('\nUav =%9.4f, Jav =%9.4f, F4/F2 =%9.4f'%(Uavg,Javg,R))
+                print('F0  =%9.4f, F2  =%9.4f, F4    =%9.4f'%(F0,F2,F4))
         else:
             mpi.report( '\n*** Hamiltonian for n_orb = %s NOT supported'%(n_orb) )
             quit()
@@ -241,6 +264,10 @@ def dmft_cycle(general_parameters, solver_parameters, observables):
             # 3. Rotationally-invariant Slater Hamiltonian (4-index)
             h_int.append( h_int_slater(general_parameters['spin_names'], orb_names_all, map_operator_structure=map_all,
                     off_diag=True, U_matrix=Umat_full, H_dump=general_parameters['jobname']+'/'+"H_full.txt") )
+
+        # save h_int to h5 archive
+        if mpi.is_master_node():
+            ar['DMFT_input']['h_int'] = h_int
 
         ####################################
         # hotfix for new triqs 2.0 gf_struct_solver is still a dict
@@ -263,13 +290,13 @@ def dmft_cycle(general_parameters, solver_parameters, observables):
     if mpi.is_master_node():
         obs_prev = []
         if 'iteration_count' in ar['DMFT_results']:
-            print '\n *** loading previous self energies ***'
+            print('\n *** loading previous self energies ***')
             SK.dc_imp = ar['DMFT_results']['last_iter']['DC_pot']
             SK.dc_energ = ar['DMFT_results']['last_iter']['DC_energ']
             if 'observables' in ar['DMFT_results']:
                 obs_prev = ar['DMFT_results']['observables']
             for icrsh in range(SK.n_inequiv_shells):
-                print 'loading Sigma_imp'+str(icrsh)+' from previous calculation'
+                print('loading Sigma_imp'+str(icrsh)+' from previous calculation')
                 S[icrsh].Sigma_iw = ar['DMFT_results']['last_iter']['Sigma_iw_'+str(icrsh)]
             calc_mu = True
         else:
@@ -289,7 +316,7 @@ def dmft_cycle(general_parameters, solver_parameters, observables):
 
             # if this is a series of calculation load previous sigma
             elif general_parameters['previous_file'] != 'none':
-                start_sigma, SK.dc_imp, SK.dc_energ = toolset.load_sigma_from_h5(general_parameters['previous_file'],-1)
+                start_sigma, SK.dc_imp, SK.dc_energ= toolset.load_sigma_from_h5(general_parameters['previous_file'],-1)
 
             # load everything now to the solver
             if start_sigma:
@@ -305,6 +332,7 @@ def dmft_cycle(general_parameters, solver_parameters, observables):
     SK.dc_energ = mpi.bcast(SK.dc_energ)
     SK.set_dc(SK.dc_imp,SK.dc_energ)
     calc_mu = mpi.bcast(calc_mu)
+
 
     # symmetrise Sigma
     for icrsh in range(SK.n_inequiv_shells): SK.symm_deg_gf(S[icrsh].Sigma_iw,orb=icrsh)
@@ -324,9 +352,9 @@ def dmft_cycle(general_parameters, solver_parameters, observables):
 
     if mpi.is_master_node():
         # print other system information
-        print "\nInverse temperature beta = %s"%(general_parameters['beta'])
+        print("\nInverse temperature beta = %s"%(general_parameters['beta']))
         if solver_parameters["measure_G_l"]:
-            print "\nSampling G(iw) in Legendre space with %s coefficients"%(general_parameters["n_LegCoeff"])
+            print("\nSampling G(iw) in Legendre space with %s coefficients"%(general_parameters["n_LegCoeff"]))
 
     # extract free lattice greens function
     G_loc_all_dft = SK.extract_G_loc(with_Sigma=False,mu=dft_mu)
@@ -338,8 +366,9 @@ def dmft_cycle(general_parameters, solver_parameters, observables):
         density_shell_dft[icrsh] = G_loc_all_dft[icrsh].total_density()
         mpi.report('total density for imp '+str(icrsh)+' from DFT: '+str(density_shell_dft[icrsh]))
 
+
     # extracting new rotation matrices from density_mat or local Hamiltonian
-    if (general_parameters['set_rot'] == 'hloc' or general_parameters['set_rot'] == 'den') and iteration_offset == 0:
+    if (general_parameters['set_rot'] == 'hloc' or general_parameters['set_rot'] == 'den') and iteration_offset == 0 and general_parameters['load_sigma'] == False:
         if general_parameters['set_rot'] == 'hloc':
             q_diag = SK.eff_atomic_levels()
             chnl = 'up'
@@ -350,8 +379,8 @@ def dmft_cycle(general_parameters, solver_parameters, observables):
         rot_mat = []
         for icrsh in range(SK.n_corr_shells):
             ish = SK.corr_to_inequiv[icrsh]
-            eigval, eigvec = numpy.linalg.eigh(np.real(q_diag[ish][chnl]))
-            rot_mat_local = numpy.array(eigvec) + 0.j
+            eigval, eigvec = np.linalg.eigh(np.real(q_diag[ish][chnl]))
+            rot_mat_local = np.array(eigvec) + 0.j
 
             rot_mat.append(rot_mat_local)
 
@@ -359,21 +388,21 @@ def dmft_cycle(general_parameters, solver_parameters, observables):
         mpi.report('Updating rotation matrices using dft %s eigenbasis to maximise sign'%(general_parameters['set_rot']))
 
         if mpi.is_master_node():
-            print "\n new rotation matrices "
+            print("\n new rotation matrices ")
             # rotation matrices
             for icrsh in range(SK.n_corr_shells):
                 n_orb = SK.corr_shells[icrsh]['dim']
-                print 'rot_mat[%2d] '%(icrsh)+'real part'.center(9*n_orb)+'  '+'imaginary part'.center(9*n_orb)
+                print('rot_mat[%2d] '%(icrsh)+'real part'.center(9*n_orb)+'  '+'imaginary part'.center(9*n_orb))
                 rot = np.matrix( SK.rot_mat[icrsh] )
                 for irow in range(n_orb):
                     fmt = '{:9.5f}' * n_orb
                     row = np.real(rot[irow,:]).tolist()[0] + np.imag(rot[irow,:]).tolist()[0]
-                    print ('           '+fmt+'  '+fmt).format(*row)
+                    print(('           '+fmt+'  '+fmt).format(*row))
 
-            print '\n'
+            print('\n')
 
-    # saving rot mat to h5 archive:
     if mpi.is_master_node() and iteration_offset == 0:
+        # saving rot mat to h5 archive:
         ar['DMFT_input']['rot_mat'] = SK.rot_mat
 
     #Double Counting if first iteration or if CSC calculation with DFTDC
@@ -383,7 +412,17 @@ def dmft_cycle(general_parameters, solver_parameters, observables):
 
         for icrsh in range(SK.n_inequiv_shells):
             ###################################################################
-            SK.calc_dc(density_mat_dft[icrsh], U_interact = general_parameters['U'][icrsh], J_hund = general_parameters['J'][icrsh], orb = icrsh, use_dc_formula = general_parameters['dc_type'])
+            if general_parameters['dc_type'] == 3:
+                # this is FLL for eg orbitals only as done in Seth PRB 96 205139 2017 eq 10
+                # this setting for U and J is reasonable as it is in the spirit of F0 and Javg
+                # for the 5 orb case
+                mpi.report('Doing FLL DC for eg orbitals only with Uavg=U-J and Javg=2*J')
+                Uavg = general_parameters['U'][icrsh] - general_parameters['J'][icrsh]
+                Javg = 2*general_parameters['J'][icrsh]
+                SK.calc_dc(density_mat_dft[icrsh], U_interact = Uavg, J_hund = Javg, orb = icrsh, use_dc_formula = 0)
+            else:
+                SK.calc_dc(density_mat_dft[icrsh], U_interact = general_parameters['U'][icrsh], J_hund = general_parameters['J'][icrsh], orb = icrsh, use_dc_formula = general_parameters['dc_type'])
+
             ###################################################################
 
     # initialise sigma if first iteration
@@ -433,7 +472,7 @@ def dmft_cycle(general_parameters, solver_parameters, observables):
         n_iter = general_parameters['n_iter_dmft_per']
 
     # if no csc calculation is done the number of dmft iterations is n_iter_dmft
-    if not general_parameters['csc'] and iteration_offset == 0:
+    if not general_parameters['csc']:
         n_iter = general_parameters['n_iter_dmft']
 
     mpi.report('\n%s DMFT cycles requested. Starting with iteration %s. \n'%(n_iter,iteration_offset+1))
@@ -577,12 +616,12 @@ def dmft_cycle(general_parameters, solver_parameters, observables):
                     S[icrsh].G_l_man << S[icrsh].G_l
                     if mpi.is_master_node():
                         for i, g in S[icrsh].G_l:
-                            g.enforce_discontinuity(numpy.identity(g.target_shape[0]))
+                            g.enforce_discontinuity(np.identity(g.target_shape[0]))
                             S[icrsh].G_iw[i].set_from_legendre(g)
                             # update G_tau as well:
                             S[icrsh].G_tau_man[i] << InverseFourier(S[icrsh].G_iw[i])
                         # set Sigma and G_iw from G_l
-                            S[icrsh].Sigma_iw << inverse(S[icrsh].G0_iw) - inverse(S[icrsh].G_iw)
+                        S[icrsh].Sigma_iw << inverse(S[icrsh].G0_iw) - inverse(S[icrsh].G_iw)
 
                         if legacy_mode:
                             # bad ass trick to avoid non asymptotic behavior of Sigma
@@ -603,14 +642,14 @@ def dmft_cycle(general_parameters, solver_parameters, observables):
             density_tot += density_shell[icrsh]*shell_multiplicity[icrsh]
             density_mat[icrsh] = S[icrsh].G_iw.density()
             if mpi.is_master_node():
-                print "\nTotal charge of impurity problem : "+"{:7.5f}".format(density_shell[icrsh])
-                print "Total charge convergency of impurity problem : "+"{:7.5f}".format(density_shell[icrsh]-density_shell_pre[icrsh])
-                print "\nDensity matrix:"
+                print("\nTotal charge of impurity problem : "+"{:7.5f}".format(density_shell[icrsh]))
+                print("Total charge convergency of impurity problem : "+"{:7.5f}".format(density_shell[icrsh]-density_shell_pre[icrsh]))
+                print("\nDensity matrix:")
                 for key,value in density_mat[icrsh].iteritems():
-                    print key
-                    print np.real(value)
+                    print(key)
+                    print(np.real(value))
                     eige, eigv = np.linalg.eigh(value)
-                    print 'eigenvalues: ', eige
+                    print('eigenvalues: ', eige)
                     # check for large off-diagonal elements and write out a warning
                     i = 0
                     j = 0
@@ -621,21 +660,21 @@ def dmft_cycle(general_parameters, solver_parameters, observables):
                             if i!=j and np.real(value)[i,j] >= 0.1:
                                 pr_warning = True
                     if pr_warning:
-                        print '\n!!! WARNING !!!'
-                        print '!!! large off diagonal elements in density matrix detected! I hope you know what you are doing !!!'
-                        print '\n!!! WARNING !!!'
+                        print('\n!!! WARNING !!!')
+                        print('!!! large off diagonal elements in density matrix detected! I hope you know what you are doing !!!')
+                        print('\n!!! WARNING !!!')
 
         # Done with loop over impurities
 
         if mpi.is_master_node():
             # Done. Now do post-processing:
-            print "\n *** Post-processing the solver output ***"
-            print "Total charge of all correlated shells : %.6f \n"%density_tot
+            print("\n *** Post-processing the solver output ***")
+            print("Total charge of all correlated shells : %.6f \n"%density_tot)
 
         # mixing Sigma
         if mpi.is_master_node():
             if it > 1:
-                print "mixing sigma with previous iteration by factor "+str(general_parameters['sigma_mix'])+'\n'
+                print("mixing sigma with previous iteration by factor "+str(general_parameters['sigma_mix'])+'\n')
                 for icrsh in range(SK.n_inequiv_shells):
                     S[icrsh].Sigma_iw << ( general_parameters['sigma_mix'] * S[icrsh].Sigma_iw
                                         +(1-general_parameters['sigma_mix']) *  ar['DMFT_results']['last_iter']['Sigma_iw_'+str(icrsh)] )
@@ -649,10 +688,18 @@ def dmft_cycle(general_parameters, solver_parameters, observables):
 
         # calculate new DC
         if general_parameters['dc_dmft'] and general_parameters['dc']:
-           for icrsh in range(SK.n_inequiv_shells):
-               dm = S[icrsh].G_iw.density()
-               # if DC should be build differently on the sites for first iterations
-               SK.calc_dc(dm, U_interact = general_parameters['U'][icrsh], J_hund = general_parameters['J'][icrsh], orb = icrsh, use_dc_formula = general_parameters['dc_type'])
+            for icrsh in range(SK.n_inequiv_shells):
+                dm = S[icrsh].G_iw.density()
+                if general_parameters['dc_type'] == 3:
+                    # this is FLL for eg orbitals only as done in Seth PRB 96 205139 2017 eq 10
+                    # this setting for U and J is reasonable as it is in the spirit of F0 and Javg
+                    # for the 5 orb case
+                    mpi.report('Doing FLL DC for eg orbitals only with Uavg=U-J and Javg=2*J')
+                    Uavg = general_parameters['U'][icrsh] - general_parameters['J'][icrsh]
+                    Javg = 2*general_parameters['J'][icrsh]
+                    SK.calc_dc(dm, U_interact = Uavg, J_hund = Javg, orb = icrsh, use_dc_formula = 0)
+                else:
+                    SK.calc_dc(dm, U_interact = general_parameters['U'][icrsh], J_hund = general_parameters['J'][icrsh], orb = icrsh, use_dc_formula = general_parameters['dc_type'])
 
         # symmetrise Sigma
         for icrsh in range(SK.n_inequiv_shells): SK.symm_deg_gf(S[icrsh].Sigma_iw,orb=icrsh)
@@ -749,8 +796,10 @@ def dmft_cycle(general_parameters, solver_parameters, observables):
             '\n *** calculation of observables ***'
             observables = calc_obs(observables,
                         general_parameters,
+                        solver_parameters,
                         it,
                         S,
+                        h_int,
                         dft_mu,
                         previous_mu,
                         SK,
@@ -768,48 +817,48 @@ def dmft_cycle(general_parameters, solver_parameters, observables):
             # write the new observable array to h5 archive
             ar['DMFT_results']['observables'] = observables
 
-            print '*** iteration finished ***'
+            print('*** iteration finished ***')
 
             # print out of the energies
             if general_parameters['calc_energies']:
-                print
-                print "="*60
-                print 'summary of energetics:'
-                print "total energy: ", observables['E_tot'][-1]
-                print "DFT energy: ", observables['E_dft'][-1]
-                print "correllation energy: ", observables['E_corr_en'][-1]
-                print "DFT band correction: ", observables['E_bandcorr'][-1]
-                print "="*60
-                print
+                print('')
+                print("="*60)
+                print('summary of energetics:')
+                print("total energy: ", observables['E_tot'][-1])
+                print("DFT energy: ", observables['E_dft'][-1])
+                print("correllation energy: ", observables['E_corr_en'][-1])
+                print("DFT band correction: ", observables['E_bandcorr'][-1])
+                print("="*60)
+                print('')
 
             # print out summary of occupations per impurity
-            print "="*60
-            print 'summary of occupations: '
+            print("="*60)
+            print('summary of occupations: ')
             for icrsh in range(SK.n_inequiv_shells):
-                print 'total occupany of impurity '+str(icrsh)+':'+"{:7.4f}".format(observables['imp_occ'][icrsh]['up'][-1]+observables['imp_occ'][icrsh]['down'][-1])
+                print('total occupany of impurity '+str(icrsh)+':'+"{:7.4f}".format(observables['imp_occ'][icrsh]['up'][-1]+observables['imp_occ'][icrsh]['down'][-1]))
             for icrsh in range(SK.n_inequiv_shells):
-                print 'G(beta/2) occ of impurity '+str(icrsh)+':'+"{:8.4f}".format(observables['imp_gb2'][icrsh]['up'][-1]+observables['imp_gb2'][icrsh]['down'][-1])
-            print "="*60
-            print
+                print('G(beta/2) occ of impurity '+str(icrsh)+':'+"{:8.4f}".format(observables['imp_gb2'][icrsh]['up'][-1]+observables['imp_gb2'][icrsh]['down'][-1]))
+            print("="*60)
+            print('')
 
             # if a magnetic calculation is done print out a summary of up/down occ
             if general_parameters['magnetic']:
                 occ = {}
                 occ['up'] = 0.0
                 occ['down'] = 0.0
-                print
-                print "="*60
-                print '\n *** summary of magnetic occupations: ***'
+                print('')
+                print("="*60)
+                print('\n *** summary of magnetic occupations: ***')
                 for icrsh in range(SK.n_inequiv_shells):
                         for spin in ['up','down']:
                             temp = observables['imp_occ'][icrsh][spin][-1]
-                            print 'imp '+str(icrsh)+' spin '+spin+': '+"{:6.4f}".format(temp)
+                            print('imp '+str(icrsh)+' spin '+spin+': '+"{:6.4f}".format(temp))
                             occ[spin] += temp
 
-                print 'total spin up   occ: '+"{:6.4f}".format(occ['up'])
-                print 'total spin down occ: '+"{:6.4f}".format(occ['down'])
-                print "="*60
-                print
+                print('total spin up   occ: '+"{:6.4f}".format(occ['up']))
+                print('total spin down occ: '+"{:6.4f}".format(occ['down']))
+                print("="*60)
+                print('')
 
         # check for convergency and stop if criteria is reached
         if it == 1 or it == iteration_offset+1:

@@ -12,48 +12,23 @@
 # suppress warnings
 import warnings
 warnings.simplefilter(action='ignore', category=FutureWarning)
+#warnings.filterwarnings('ignore')
 
 # system
-import os.path
 import os
 import sys
-import numpy as np
 import shutil
 from timeit import default_timer as timer
-import configparser as cp
-import errno
-import re
-import shutil
 
 # triqs
 import pytriqs.utility.mpi as mpi
-from pytriqs.operators.util import *
 from pytriqs.archive import HDFArchive
-try:
-    # TRIQS 2.0
-    from triqs_cthyb import *
-    from triqs_dft_tools.sumk_dft import *
-    from triqs_dft_tools.sumk_dft_tools import *
-    from triqs_dft_tools.converters.vasp_converter import *
-    from triqs_dft_tools.converters.plovasp.vaspio import VaspData
-    import triqs_dft_tools.converters.plovasp.converter as plo_converter
-    from pytriqs.gf import *
-except ImportError:
-    # TRIQS 1.4
-    from pytriqs.applications.impurity_solvers.cthyb import *
-    from pytriqs.applications.dft.sumk_dft import *
-    from pytriqs.applications.dft.sumk_dft_tools import *
-    from pytriqs.applications.dft.converters.vasp_converter import *
-    from pytriqs.applications.dft.converters.plovasp.vaspio import VaspData
-    import pytriqs.applications.dft.converters.plovasp.converter as plo_converter
-    from pytriqs.gf.local import *
 
 # own modules
-from read_config import *
-from observables import *
-from dmft_cycle import *
+from read_config import read_config
+from observables import prep_observables
+from dmft_cycle import dmft_cycle
 from csc_flow import csc_flow_control
-import toolset as toolset
 
 # timing information
 if mpi.is_master_node(): global_start = timer()
@@ -63,19 +38,19 @@ general_parameters = {}
 solver_parameters = {}
 if mpi.is_master_node():
     if len(sys.argv) > 1:
-        print 'reading the config file '+str(sys.argv[1])
+        print('reading the config file '+str(sys.argv[1]))
         general_parameters, solver_parameters = read_config(str(sys.argv[1]))
         general_parameters['config_file'] = str(sys.argv[1])
     else:
-        print 'reading the config file dmft_config.ini'
+        print('reading the config file dmft_config.ini')
         general_parameters, solver_parameters = read_config('dmft_config.ini')
         general_parameters['config_file'] = 'dmft_config.ini'
-    print '-------------------------- \n General parameters:'
+    print('-------------------------- \n General parameters:')
     for key, value in general_parameters.iteritems():
-        print "{0: <20}".format(key)+"{0: <4}".format(str(value))
-    print '-------------------------- \n Solver parameters:'
+        print("{0: <20}".format(key)+"{0: <4}".format(str(value)))
+    print('-------------------------- \n Solver parameters:')
     for key, value in solver_parameters.iteritems():
-        print "{0: <20}".format(key)+"{0: <4}".format(str(value))
+        print("{0: <20}".format(key)+"{0: <4}".format(str(value)))
 
 solver_parameters = mpi.bcast(solver_parameters)
 general_parameters = mpi.bcast(general_parameters)
@@ -86,7 +61,7 @@ if general_parameters['csc']:
     # check if seedname is only one Value
     if len(general_parameters['seedname']) > 1:
         mpi.report('!!! WARNING !!!')
-        mpi.report('CSC calculations can only be done for one set of files at a time')
+        mpi.report('CSC calculations can only be done for one set of file at a time')
 
     # some basic setup that needs to be done for CSC calculations
     general_parameters['seedname'] = general_parameters['seedname'][0]
@@ -123,7 +98,7 @@ else:
 
         if mpi.is_master_node():
             # create output directory
-            print 'calculation is performed in subfolder: '+general_parameters['jobname']
+            print('calculation is performed in subfolder: '+general_parameters['jobname'])
             if not os.path.exists(general_parameters['jobname']):
                 os.makedirs(general_parameters['jobname'])
 
@@ -133,7 +108,7 @@ else:
                 shutil.copyfile(general_parameters['config_file'],
                 general_parameters['jobname']+'/'+general_parameters['config_file'])
             else:
-                print '#'*80+'\n WARNING! specified job folder already exists continuing previous job! \n'+'#'*80+'\n'
+                print('#'*80+'\n WARNING! specified job folder already exists continuing previous job! \n'+'#'*80+'\n')
 
         mpi.report("#"*80)
         mpi.report('starting the DMFT calculation for '+str(general_parameters['seedname']))
@@ -162,5 +137,5 @@ else:
 
 if mpi.is_master_node():
     global_end = timer()
-    print '-------------------------------'
-    print 'overall elapsed time: %10.4f seconds'%(global_end-global_start)
+    print('-------------------------------')
+    print('overall elapsed time: %10.4f seconds'%(global_end-global_start))

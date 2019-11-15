@@ -2,13 +2,13 @@
 This program allows to perform DFT+DMFT ''one-shot'' and charge self-consistent
 calculations from h5 archives or VASP input files for multiband systems using
 the TRIQS package, in combination with the CThyb solver and SumkDFT from
-DFT-tools. Runs with both triqs 1.4.2 and triqs 2.1. (https://github.com/TRIQS/)
+DFT-tools. Runs with both triqs 1.4.2 and triqs 2.x.x (https://github.com/TRIQS/)
 
 For one-shot calculations one starts directly by running `run_dmft.py`, whereas
 for CSC calculations one uses the `vasp_dmft.sh` bash scripts to start both VASP
 and triqs at once.
 
-Copyright (C) 2019, A. Hampel, S. Beck and C. Ederer from Materials Theory Group
+Copyright (C) 2019, A. Hampel, S. Beck, M. Merkel, and C. Ederer from Materials Theory Group
 at ETH Zurich.
 
 This application is free software: you can redistribute it and/or modify it

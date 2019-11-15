@@ -1,18 +1,15 @@
 # contains the CSC flow control functions
 
-import numpy as np
 import time
 from timeit import default_timer as timer
 import os.path
 
-
 # triqs
 import pytriqs.utility.mpi as mpi
+from pytriqs.archive import HDFArchive
 try:
     # TRIQS 2.0
-    from triqs_dft_tools.sumk_dft import *
-    from triqs_dft_tools.sumk_dft_tools import *
-    from triqs_dft_tools.converters.vasp_converter import *
+    from triqs_dft_tools.converters.vasp_converter import VaspConverter
     import triqs_dft_tools.converters.plovasp.converter as plo_converter
 except ImportError:
     # TRIQS 1.4
@@ -20,9 +17,11 @@ except ImportError:
     from pytriqs.applications.dft.sumk_dft_tools import *
     from pytriqs.applications.dft.converters.vasp_converter import *
     import pytriqs.applications.dft.converters.plovasp.converter as plo_converter
+    pass
 
-from observables import *
-import toolset as toolset
+#from observables import *
+from observables import prep_observables
+import toolset
 from dmft_cycle import dmft_cycle
 
 def csc_flow_control(general_parameters, solver_parameters):
@@ -98,13 +97,13 @@ def csc_flow_control(general_parameters, solver_parameters):
         mpi.barrier()
 
         if mpi.is_master_node():
-            print
-            print "="*80
-            print 'DFT cycle took %10.4f seconds'%(end_dft-start_dft)
-            print "calling dmft_cycle"
-            print "DMFT iteration", iter_dmft+1,"/", general_parameters['n_iter_dmft']
-            print "="*80
-            print
+            print('')
+            print("="*80)
+            print('DFT cycle took %10.4f seconds'%(end_dft-start_dft))
+            print("calling dmft_cycle")
+            print("DMFT iteration", iter_dmft+1,"/", general_parameters['n_iter_dmft'])
+            print("="*80)
+            print('')
 
         # if first iteration the h5 archive and observables need to be prepared
         if iter_dmft == 0:
@@ -139,12 +138,12 @@ def csc_flow_control(general_parameters, solver_parameters):
 
         if mpi.is_master_node():
             end_dmft = timer()
-            print
-            print "="*80
-            print 'DMFT cycle took %10.4f seconds'%(end_dmft-start_dmft)
-            print "running VASP now"
-            print "="*80
-            print
+            print('')
+            print("="*80)
+            print('DMFT cycle took %10.4f seconds'%(end_dmft-start_dmft))
+            print("running VASP now")
+            print("="*80)
+            print('')
         #######
 
         # remove the lock file and Vasp will be unleashed
@@ -157,8 +156,8 @@ def csc_flow_control(general_parameters, solver_parameters):
 
     # stop if the maximum number of dmft iterations is reached
     if mpi.is_master_node():
-        print "\n  Maximum number of iterations reached."
-        print "  Aborting VASP iterations...\n"
+        print("\n  Maximum number of iterations reached.")
+        print("  Aborting VASP iterations...\n")
         f_stop = open('STOPCAR', 'wt')
         f_stop.write("LABORT = .TRUE.\n")
         f_stop.close()
