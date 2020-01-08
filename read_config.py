@@ -37,8 +37,6 @@ def read_config(config_file):
                 number of iterations per dmft step in CSC calculations
     n_iter_dmft : int
             number of iterations per dmft cycle after first cycle
-    n_iter_dft : int, optional, default = 8
-                number of dft iterations per cycle
     dc_type : int
                 0: FLL
                 1: held formula, needs to be used with slater-kanamori h_int_type=2
@@ -98,6 +96,7 @@ def read_config(config_file):
                 use density_mat_dft to diagonalize occupations = 'den'
                 use hloc_dft to diagonalize occupations = 'hloc'
 
+
     __Solver Parameters:__
     ----------
     length_cycle : int
@@ -128,10 +127,21 @@ def read_config(config_file):
     fit_max_n : int, optional
                 number of highest matsubara frequency to fit
 
+    __DFT code parameters (only for csc):__
+    ----------
+    n_cores_dft : int
+                number of cores for the DFT code (VASP)
+    n_iter_dft : int, optional, default = 6
+                number of dft iterations per cycle
+    dft_executable : string, default= 'vasp_std'
+                command for the DFT / VASP executable
+
     __Returns:__
     general_parameters : dict
 
     solver_parameters : dict
+
+    dft_parameters : dict
 
     """
     config = cp.ConfigParser()
@@ -139,6 +149,7 @@ def read_config(config_file):
 
     solver_parameters = {}
     general_parameters = {}
+    dft_parameters = {}
 
     # required parameters
     general_parameters['seedname'] = map(str, str(config['general']['seedname'].replace(" ","")).split(','))
@@ -166,11 +177,6 @@ def read_config(config_file):
         else:
             general_parameters['n_iter_dmft_per'] = 2
 
-        if 'n_iter_dft' in config['general']:
-            general_parameters['n_iter_dft'] = int(config['general']['n_iter_dft'])
-        else:
-            general_parameters['n_iter_dft'] = 6
-
         if 'plo_cfg' in config['general']:
             general_parameters['plo_cfg'] = str(config['general']['plo_cfg'])
         else:
@@ -179,6 +185,25 @@ def read_config(config_file):
         if general_parameters['n_iter_dmft'] < general_parameters['n_iter_dmft_first']:
             mpi.report('*** error: total number of iterations should be at least = n_iter_dmft_first ***')
             mpi.MPI.COMM_WORLD.Abort(1)
+
+        # DFT specific parameters
+        dft_parameters['n_cores'] = int(config['dft']['n_cores'])
+
+        if 'n_iter' in config['dft']:
+            dft_parameters['n_iter'] = int(config['dft']['n_iter'])
+        else:
+            dft_parameters['n_iter'] = 6
+
+        if 'executable' in config['dft']:
+            dft_parameters['executable'] = str(config['dft']['executable'])
+        else:
+            dft_parameters['executable'] = 'vasp_std'
+
+        if 'store_eigenvals' in config['dft']:
+            dft_parameters['store_eigenvals'] = config['dft'].getboolean('store_eigenvals')
+        else:
+            dft_parameters['store_eigenvals'] = False
+
     else:
         general_parameters['csc'] = False
 
@@ -276,11 +301,6 @@ def read_config(config_file):
     else:
         general_parameters['dft_mu'] = 0.0
 
-    if 'store_dft_eigenvals' in config['general']:
-        general_parameters['store_dft_eigenvals'] = config['general'].getboolean('store_dft_eigenvals')
-    else:
-        general_parameters['store_dft_eigenvals'] = False
-
     if 'rm_complex' in config['general']:
         general_parameters['rm_complex'] = config['general'].getboolean('rm_complex')
     else:
@@ -347,4 +367,4 @@ def read_config(config_file):
     if 'fit_max_n' in config['solver_parameters']:
         solver_parameters["fit_max_n"] = int(config['solver_parameters']['fit_max_n'])
 
-    return general_parameters,solver_parameters
+    return general_parameters, solver_parameters, dft_parameters

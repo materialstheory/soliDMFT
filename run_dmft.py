@@ -36,14 +36,15 @@ if mpi.is_master_node(): global_start = timer()
 # reading configuration for calculation
 general_parameters = {}
 solver_parameters = {}
+dft_parameters = {}
 if mpi.is_master_node():
     if len(sys.argv) > 1:
         print('reading the config file '+str(sys.argv[1]))
-        general_parameters, solver_parameters = read_config(str(sys.argv[1]))
+        general_parameters, solver_parameters, dft_parameters = read_config(str(sys.argv[1]))
         general_parameters['config_file'] = str(sys.argv[1])
     else:
         print('reading the config file dmft_config.ini')
-        general_parameters, solver_parameters = read_config('dmft_config.ini')
+        general_parameters, solver_parameters, dft_parameters = read_config('dmft_config.ini')
         general_parameters['config_file'] = 'dmft_config.ini'
     print('-------------------------- \n General parameters:')
     for key, value in general_parameters.iteritems():
@@ -51,9 +52,14 @@ if mpi.is_master_node():
     print('-------------------------- \n Solver parameters:')
     for key, value in solver_parameters.iteritems():
         print("{0: <20}".format(key)+"{0: <4}".format(str(value)))
+    if general_parameters['csc']:
+        print('-------------------------- \n DFT parameters:')
+        for key, value in dft_parameters.iteritems():
+            print("{0: <20}".format(key)+"{0: <4}".format(str(value)))
 
 solver_parameters = mpi.bcast(solver_parameters)
 general_parameters = mpi.bcast(general_parameters)
+dft_parameters = mpi.bcast(dft_parameters)
 
 # start CSC calculation if csc is set to true
 if general_parameters['csc']:
@@ -69,7 +75,7 @@ if general_parameters['csc']:
     general_parameters['previous_file'] = 'none'
 
     # run the whole machinery
-    csc_flow_control(general_parameters, solver_parameters)
+    csc_flow_control(general_parameters, solver_parameters, dft_parameters)
 
 # do a one-shot calculation with given h5 archive
 else:

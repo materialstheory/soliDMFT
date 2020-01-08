@@ -1,0 +1,26 @@
+#!/bin/bash
+#SBATCH --job-name="svo-csc"
+#SBATCH --time=06:00:00
+#SBATCH --nodes=4
+#SBATCH --tasks-per-node=40
+#SBATCH --output=out.%j
+#SBATCH --error=err.%j
+#======START=====
+
+export OMP_NUM_THREADS=1
+ulimit -s unlimited
+
+module load gcc/7.4.0
+module load python2/2.7.16
+module load lib/openblas
+module load openmpi2/2.1.6-hfi
+module load python2-mpi4py/2.7.16-openmpi2
+module load lib/hdf5/1.8.21-openmpi2
+module load lib/boost/1.70-gcc7-openmpi2
+module load lib/fftw3/3.3.8-openmpi2
+module load lib/NFFT/3.4.0
+module load triqs/triqs/2.2.0
+module load triqs/cthyb/2.2.0
+module load triqs/dft_tools/2.2.0
+
+mpirun python /mnt/home/ahampel/work/test/svo_csc/soliDMFT/run_dmft.py
