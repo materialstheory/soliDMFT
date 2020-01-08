@@ -4,7 +4,6 @@ NWRITE = 2
 PREC = Normal
 ISPIN = 1   ! no spin=1
 ICHARG=5 ! 5 for fcsc calculations (communication with python)
-IMIX=0
 
 EDIFF = 1.E-06
 ISYM = -1 ! I don't think it works when using symmetries
@@ -14,17 +13,18 @@ NELMDL=-2 ! first perform 14 iterations to converge the KS wavefunction
 
 !! DOS energy window
 NEDOS = 3001
+
 !! Smearing procedure
 ISMEAR = -5 ! -4 (-5) Tetrahedron (with Bloechl), 0 Gaussian, 1,... Methfessel-Paxton
 SIGMA=0.01
 !! real/reci projection scheme
 LREAL = .FALSE. ! my master's voice told me to
-!! Algo=Fast/Normal
+
+! ALGO Normal of IALGO = 90
 ALGO = Normal
-!! subspace rotation - TRUE (=default) means slower and more stable for metals, small gaps
-! LDIAG = .TRUE.
+
+
 !! parallelization parameters
-LPLANE = .TRUE. ! TRUE for not massively parallel (1000) computations
 NSIM = 2 ! 4 should increase performance
 NCORE = 6
 
@@ -36,4 +36,4 @@ LOCPROJ = 2 : d : Pr
 
 !! write WAVECAR, CHGCAR
 LWAVE = .FALSE.
-LCHARG = .TRUE.
+LCHARG = .FALSE.

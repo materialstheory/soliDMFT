@@ -41,9 +41,7 @@ Please also note that we do not provide user support for this code.
 
 ## getting started
 
-For one-shot calculations one starts directly by running `run_dmft.py`, whereas
-for CSC calculations one uses the `vasp_dmft.sh` bash scripts to start both VASP
-and triqs at once.
+For one-shot and CSC calculations one starts directly by running `run_dmft.py`. In case of CSC calculations one has to set `cscs = True` in the config file (see below).
 
 In the `example` directory one finds several
 examples to run. Best start with the svo-one-shot example. The
@@ -93,30 +91,24 @@ building the Dockerfile in `/Docker/`:
 docker build -t triqs_vasp_csc ./
 ```
 Then start this docker image as done above and go to the directory with all
-necessary input files (start with `svo-csc` example). You need a preconverged
+necessary input files (start with `svo-csc` example). You need a pre-converged
 CHGCAR and preferably a WAVECAR, a set of INCAR, POSCAR, KPOINTS and POTCAR
 files, the PLO cfg file `plo.cfg` and the usual DMFT input file
-`dmft_config.ini`.
+`dmft_config.ini`, which specifies the number of ranks for the DFT code and the DFT code executable in the `[dft]` section.
 
-One starts the whole machinery by calling via bash the `vasp_dmft.sh` script in
-the top dir from inside the docker container:
+The whole machinery is started by calling `run_dmft.py` as normal. Importantly the flag `csc = True` has to be set in the general section in the config file. Then:
 ```
-/work/vasp_dmft.sh -n 12 -v 12 /work/run_dmft.py
+mpirun -n 12 /work/run_dmft.py
 ```
-This will call automatically VASP with `-v 12` threads and triqs with `-n 12`
-threads, where triqs starts the specified `run_dmft.py`. If one now set the `csc`
-flag in the `dmft_config.ini` file to True, triqs will wait for vasp to create
-PLOs, run the converter, run the dmft_cycle, and then VASP again until the given
-limit of DMFT iterations is reached.
+The programm will then run the `csc_flow_control` routine, which starts VASP accordingly by spawning a new child process. After VASP is finished it will run the converter, run the dmft_cycle, and then VASP again until the given
+limit of DMFT iterations is reached. This should also work on most HPC systems (tested on slurm with OpenMPI), as the the child mpirun call is performed without the slurm environment variables. This tricks slrum into starting more ranks than it has available.
 
 One remark regarding the number of iterations per DFT cycle. Since VASP uses a
 block Davidson scheme for minimizing the energy functional not all eigenvalues
 of the Hamiltonian are updated simultaneously therefore one has to make several
 iterations before the changes from DMFT in the charge density are completely
-considered. The default value are __8__ DFT iterations, which is very
-conservative. In general I found, that even in charge ordered systems __6__
-iterations are enough, but that can of course also differ with system size.
-Careful testing is advised!
+considered. The default value are __6__ DFT iterations, which is very
+conservative, and can be changed by changing the config parameter `n_iter` in the `[dft]` section. In general one should use `IALGO=90` in VASP, which performs an exact diagonalization rather than a partial diagonalization scheme, but this is very slow for larger systems.
 
 ## remarks on the VASP version
 
