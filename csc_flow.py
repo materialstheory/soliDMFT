@@ -3,7 +3,6 @@
 import time
 from timeit import default_timer as timer
 import os.path
-import psutil
 import socket
 from collections import defaultdict
 
@@ -48,7 +47,8 @@ def start_vasp_from_master_node(number_cores, vasp_command='vasp'):
 
         # clean environment
         env = {}
-        for e in ['PATH','LD_LIBRARY_PATH','SHELL','PWD','HOME','OMP_NUM_THREADS','OMPI_MCA_btl_vader_single_copy_mechanism']:
+        for e in ['PATH','LD_LIBRARY_PATH','SHELL','PWD','HOME',
+                'OMP_NUM_THREADS','OMPI_MCA_btl_vader_single_copy_mechanism']:
             v = os.getenv(e)
             if v: env[e] = v
 
@@ -62,7 +62,9 @@ def start_vasp_from_master_node(number_cores, vasp_command='vasp'):
                     break
 
         # arguments for mpirun! for the scond node mpirun starts the rank by using ssh, therefore we need to handover the eng with -x
-        args = [exe, '-hostfile', hostfile, '-np', str(number_cores), '-mca', 'mtl', '^psm2,ofi', '-x', 'LD_LIBRARY_PATH', '-x', 'PATH', '-x' 'OMP_NUM_THREADS' ,vasp_command]
+        args = [exe, '-hostfile', hostfile, '-np', str(number_cores),
+                '-mca', 'mtl', '^psm2,ofi', '-x', 'LD_LIBRARY_PATH',
+                '-x', 'PATH', '-x', 'OMP_NUM_THREADS', vasp_command]
 
         vasp_pid = os.fork()
         if vasp_pid == 0:
@@ -76,14 +78,6 @@ def start_vasp_from_master_node(number_cores, vasp_command='vasp'):
             os.execve(exe, args, env)
             print('\n VASP exec failed \n')
             os._exit(127)
-
-        # wait a moment for VASP to start
-        time.sleep(5)
-
-        if psutil.pid_exists(vasp_pid):
-            print("VASP is running with pid %d" % vasp_pid)
-        else:
-            print("\n !!!   VASP failed to start   !!! \n")
 
     mpi.barrier()
     vasp_pid = mpi.bcast(vasp_pid)
