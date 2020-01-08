@@ -30,6 +30,7 @@ def is_vasp_lock_present():
     res_bool = False
     if mpi.is_master_node():
         res_bool = os.path.isfile('./vasp.lock')
+    mpi.barrier()
     res_bool = mpi.bcast(res_bool)
     return res_bool
 
