@@ -756,40 +756,16 @@ def dmft_cycle(general_parameters, solver_parameters, observables):
 
         mpi.barrier()
 
-        # calculate energies now if wanted
-
-        # calculate interaction energy
-        E_int = np.zeros(SK.n_inequiv_shells)
-        E_corr_en = 0.0
-        e_int_shell = 0.0
-        E_bandcorr = 0.0
-
-        if general_parameters['calc_energies']:
-            # dmft interaction energy with E_int = 0.5 * Tr[Sigma * G]
-            if mpi.is_master_node():
-                for icrsh in range(SK.n_inequiv_shells):
-                    #calc energy for given S and G
-                    E_int[icrsh] = 0.5 * (S[icrsh].G_iw* S[icrsh].Sigma_iw).total_density()
-                    E_corr_en += shell_multiplicity[icrsh]*E_int[icrsh] - shell_multiplicity[icrsh]*SK.dc_energ[SK.inequiv_to_corr[icrsh]]
-            mpi.barrier()
-            E_int = mpi.bcast(E_int)
-            E_corr_en = mpi.bcast(E_corr_en)
-
-        # for a one shot calculation we are using our own method
-        if not general_parameters['csc'] and general_parameters['calc_energies'] == True:
-            E_bandcorr = calc_bandcorr_man(general_parameters, SK, E_kin_dft)
 
         # if we do a CSC calculation we need always an updated GAMMA file
+        E_bandcorr = 0.0
         if general_parameters['csc']:
             # handling the density correction for fcsc calculations
             dN, d, E_bandcorr = SK.calc_density_correction(filename = 'GAMMA',dm_type='vasp')
 
-        # DFT energy
-        E_dft = 0.0
-        if mpi.is_master_node() and general_parameters['csc']:
-            # Read energy from OSZICAR
-            E_dft = toolset.get_dft_energy()
-        E_dft = mpi.bcast(E_dft)
+        # for a one shot calculation we are using our own method
+        if not general_parameters['csc'] and general_parameters['calc_energies'] == True:
+            E_bandcorr = calc_bandcorr_man(general_parameters, SK, E_kin_dft)
 
         # calculate observables and write them to file
         if mpi.is_master_node():
@@ -807,10 +783,7 @@ def dmft_cycle(general_parameters, solver_parameters, observables):
                         density_mat_dft,
                         density_mat,
                         shell_multiplicity,
-                        E_dft,
-                        E_bandcorr,
-                        E_int,
-                        E_corr_en)
+                        E_bandcorr)
 
             write_obs(observables,SK,general_parameters)
 

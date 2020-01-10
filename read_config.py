@@ -182,7 +182,7 @@ def read_config(config_file):
         else:
             general_parameters['plo_cfg'] = 'plo.cfg'
 
-        if general_parameters['n_iter_dmft'] < general_parameters['n_iter_dmft_first']:
+        if general_parameters['csc'] and general_parameters['n_iter_dmft'] < general_parameters['n_iter_dmft_first']:
             mpi.report('*** error: total number of iterations should be at least = n_iter_dmft_first ***')
             mpi.MPI.COMM_WORLD.Abort(1)
 

@@ -25,7 +25,9 @@ except ImportError:
     from pytriqs.applications.dft.converters.plovasp.vaspio import VaspData
     import pytriqs.applications.dft.converters.plovasp.converter as plo_converter
     from pytriqs.gf.local import *
-    
+
+import toolset
+
 
 def prep_observables(general_parameters, h5_archive):
     """
@@ -61,7 +63,6 @@ def prep_observables(general_parameters, h5_archive):
         observables['E_tot'] = []
         observables['E_bandcorr'] = []
         observables['E_int'] = []
-        observables['E_int_rho'] = []
         observables['E_corr_en'] = []
         observables['E_dft'] = []
         observables['E_DC'] = []
@@ -75,7 +76,6 @@ def prep_observables(general_parameters, h5_archive):
         for icrsh in range(0,n_inequiv_shells):
 
             observables['E_int'].append([])
-            observables['E_int_rho'].append([])
             observables['E_DC'].append([])
             observables['rho'].append([])
             observables['h_loc'].append([])
@@ -151,7 +151,7 @@ def prepare_obs_files(general_parameters,n_inequiv_shells):
 
     return
 
-def calc_obs(observables, general_parameters, solver_parameters, it, S, h_int, dft_mu, previous_mu, SK, G_loc_all_dft, density_mat_dft, density_mat, shell_multiplicity, E_dft, E_bandcorr, E_int, E_corr_en):
+def calc_obs(observables, general_parameters, solver_parameters, it, S, h_int, dft_mu, previous_mu, SK, G_loc_all_dft, density_mat_dft, density_mat, shell_multiplicity, E_bandcorr):
     """
     calculates the observables for given Input, I decided to calculate the observables
     not adhoc since it should be done only once by the master_node
@@ -197,6 +197,16 @@ def calc_obs(observables, general_parameters, solver_parameters, it, S, h_int, d
     observables: list of dicts
     """
 
+
+    # empty energy values
+    E_dft = 0.0
+    E_int = np.zeros(SK.n_inequiv_shells)
+    E_corr_en = 0.0
+
+    if general_parameters['csc']:
+        # Read energy from OSZICAR
+        E_dft = toolset.get_dft_energy()
+
     # write the DFT obs a 0 iteration
     if it == 1:
         observables['iteration'].append(0)
@@ -209,7 +219,6 @@ def calc_obs(observables, general_parameters, solver_parameters, it, S, h_int, d
         for icrsh in range(0,SK.n_inequiv_shells):
             # determine number of orbitals per shell
             observables['E_int'][icrsh].append(0.0)
-            observables['E_int_rho'][icrsh].append(0.0)
             if (general_parameters['dc_type'] >= 0):
                 observables['E_DC'][icrsh].append(shell_multiplicity[icrsh]*SK.dc_energ[SK.inequiv_to_corr[icrsh]])
             else:
@@ -281,19 +290,46 @@ def calc_obs(observables, general_parameters, solver_parameters, it, S, h_int, d
     observables['iteration'].append(it)
     observables['mu'].append(float(previous_mu))
     observables['E_bandcorr'].append(E_bandcorr)
-    observables['E_corr_en'].append(E_corr_en)
     observables['E_dft'].append(E_dft)
+
+    # if density matrix was measured store result in observables
+    if solver_parameters["measure_density_matrix"]:
+        for icrsh in range(SK.n_inequiv_shells):
+            if icrsh == 0:
+                mpi.report("\nextracting the impurity density matrix")
+            # Extract accumulated density matrix
+            observables["rho"][icrsh].append( S[icrsh].density_matrix )
+
+            # storing the local Hamiltonian
+            observables["h_loc"][icrsh].append( S[icrsh].h_loc )
+
+            # Object containing eigensystem of the local Hamiltonian
+            observables["h_loc_diag"][icrsh].append( S[icrsh].h_loc_diagonalization )
+
+    if general_parameters['calc_energies']:
+        # dmft interaction energy with E_int = 0.5 * Tr[Sigma * G]
+        for icrsh in range(SK.n_inequiv_shells):
+            if solver_parameters["measure_density_matrix"]:
+                E_int[icrsh] = trace_rho_op(observables["rho"][icrsh][-1],
+                                        h_int[icrsh],
+                                        observables["h_loc_diag"][icrsh][-1])
+            else:
+                #calc energy for given S and G
+                print('\n Warning: calculating the interaction with unstable Migdal formula, consider turing on measure density matrix to use the more stable trace_rho_op function \n')
+
+                E_int[icrsh] = 0.5 * (S[icrsh].G_iw* S[icrsh].Sigma_iw).total_density()
+
+            observables['E_int'][icrsh].append(float(shell_multiplicity[icrsh]*E_int[icrsh]))
+            E_corr_en += shell_multiplicity[icrsh]*E_int[icrsh] - shell_multiplicity[icrsh]*SK.dc_energ[SK.inequiv_to_corr[icrsh]]
+
+
+    observables['E_corr_en'].append(E_corr_en)
 
     # calc total energy
     E_tot = E_dft + E_bandcorr + E_corr_en
     observables['E_tot'].append(E_tot)
 
     for icrsh in range(0,SK.n_inequiv_shells):
-        observables['E_int'][icrsh].append(float(shell_multiplicity[icrsh]*E_int[icrsh]))
-        if (general_parameters['dc_type'] >= 0):
-            observables['E_DC'][icrsh].append(shell_multiplicity[icrsh]*SK.dc_energ[SK.inequiv_to_corr[icrsh]])
-        else:
-            observables['E_DC'][icrsh].append(0.0)
 
         gb2_imp_up = 0.0
         gb2_imp_down = 0.0
@@ -304,23 +340,6 @@ def calc_obs(observables, general_parameters, solver_parameters, it, S, h_int, d
         occ_orb_up = []
         occ_orb_down = []
 
-        # if density matrix was measured store result in observables
-        if solver_parameters["measure_density_matrix"] and mpi.is_master_node():
-            mpi.report("\nextracting the impurity density matrix")
-            # Extract accumulated density matrix
-            observables["rho"][icrsh].append( S[icrsh].density_matrix )
-
-            # storing the local Hamiltonian
-            observables["h_loc"][icrsh].append( S[icrsh].h_loc )
-
-            # Object containing eigensystem of the local Hamiltonian
-            observables["h_loc_diag"][icrsh].append( S[icrsh].h_loc_diagonalization )
-
-            E_h_int = trace_rho_op(observables["rho"][icrsh][-1],
-                                    h_int[icrsh],
-                                    observables["h_loc_diag"][icrsh][-1])
-
-            observables['E_int_rho'][icrsh].append(float(shell_multiplicity[icrsh]*E_h_int))
 
         # iterate over all spin channels and add the to up or down
         for spin_channel, elem in SK.gf_struct_solver[icrsh].iteritems():

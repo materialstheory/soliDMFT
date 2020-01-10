@@ -52,7 +52,7 @@ def start_vasp_from_master_node(number_cores, vasp_command='vasp'):
             v = os.getenv(e)
             if v: env[e] = v
 
-        # find mpirun (needs full path for orted) TODO: use shutil.which on python3
+        # assuming that mpirun points to the correct mpi env
         exe = 'mpirun'
         for d in os.getenv('PATH', os.defpath).split(os.pathsep):
             if d:
@@ -61,7 +61,7 @@ def start_vasp_from_master_node(number_cores, vasp_command='vasp'):
                     exe = p
                     break
 
-        # arguments for mpirun! for the scond node mpirun starts the rank by using ssh, therefore we need to handover the eng with -x
+        # arguments for mpirun: for the scond node, mpirun starts VASP by using ssh, therefore we need to handover the env variables with -x
         args = [exe, '-hostfile', hostfile, '-np', str(number_cores),
                 '-mca', 'mtl', '^psm2,ofi', '-x', 'LD_LIBRARY_PATH',
                 '-x', 'PATH', '-x', 'OMP_NUM_THREADS', vasp_command]

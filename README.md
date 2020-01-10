@@ -101,7 +101,7 @@ The whole machinery is started by calling `run_dmft.py` as normal. Importantly t
 mpirun -n 12 /work/run_dmft.py
 ```
 The programm will then run the `csc_flow_control` routine, which starts VASP accordingly by spawning a new child process. After VASP is finished it will run the converter, run the dmft_cycle, and then VASP again until the given
-limit of DMFT iterations is reached. This should also work on most HPC systems (tested on slurm with OpenMPI), as the the child mpirun call is performed without the slurm environment variables. This tricks slrum into starting more ranks than it has available.
+limit of DMFT iterations is reached. This should also work on most HPC systems (tested on slurm with OpenMPI), as the the child mpirun call is performed without the slurm environment variables. This tricks slrum into starting more ranks than it has available. Note, that maybe a slight adaption of the environment variables is needed to make sure VASP is found on the second node. The variables are stored `args` in the function `start_vasp_from_master_node` of the module `csc_flow.py`
 
 One remark regarding the number of iterations per DFT cycle. Since VASP uses a
 block Davidson scheme for minimizing the energy functional not all eigenvalues
