@@ -17,7 +17,7 @@ try:
     # TRIQS 2.0
     from triqs_cthyb.solver import Solver
     from triqs_dft_tools.sumk_dft import SumkDFT
-    from pytriqs.gf import GfImTime, GfLegendre, BlockGf
+    from pytriqs.gf import GfImTime, GfLegendre, BlockGf, make_hermitian
     from pytriqs.gf.tools import inverse
     from pytriqs.gf.descriptors import Fourier, InverseFourier
     legacy_mode = False
@@ -520,6 +520,10 @@ def dmft_cycle(general_parameters, solver_parameters, observables):
 
             # dyson equation to extract G0_iw
             S[icrsh].G0_iw << inverse(S[icrsh].Sigma_iw + inverse(S[icrsh].G_iw))
+
+            # impose fundamental symmetries
+            S[icrsh].G0_iw << make_hermitian(S[icrsh].G0_iw)
+
             SK.symm_deg_gf(S[icrsh].G0_iw,orb=icrsh)
 
             # prepare our G_tau and G_l used to save the 'good' G_tau
@@ -545,16 +549,6 @@ def dmft_cycle(general_parameters, solver_parameters, observables):
                 S[icrsh].G_l_man = BlockGf(name_list = SK.gf_struct_solver[icrsh].keys(),
                                            block_list = glist_l,
                                            make_copies = True)
-
-            # atm small complex parts can numerical increase and cause trouble
-            # at some point in iterations, this is a fix to remove those off
-            # diagonal parts.
-            if general_parameters['rm_complex']:
-                for name, g in S[icrsh].G0_iw:
-                    G0_tau = GfImTime(indices = g.indices, beta = general_parameters['beta'])
-                    G0_tau << InverseFourier(g)
-                    G0_tau.data[:,:,:] = np.real(G0_tau.data[:,:,:])
-                    S[icrsh].G0_iw[name] << Fourier(G0_tau)
 
             # if we do a AFM calculation we can use the init magnetic moments to
             # copy the self energy instead of solving it explicitly
@@ -620,6 +614,9 @@ def dmft_cycle(general_parameters, solver_parameters, observables):
                             S[icrsh].G_iw[i].set_from_legendre(g)
                             # update G_tau as well:
                             S[icrsh].G_tau_man[i] << InverseFourier(S[icrsh].G_iw[i])
+                        # Symmetrize
+                        S[icrsh].G_iw << make_hermitian(S[icrsh].G_iw)
+
                         # set Sigma and G_iw from G_l
                         S[icrsh].Sigma_iw << inverse(S[icrsh].G0_iw) - inverse(S[icrsh].G_iw)
 
@@ -636,6 +633,7 @@ def dmft_cycle(general_parameters, solver_parameters, observables):
                     S[icrsh].G_tau_man << mpi.bcast(S[icrsh].G_tau_man)
                 else:
                     S[icrsh].G_tau_man << S[icrsh].G_tau
+                    S[icrsh].G_iw << make_hermitian(S[icrsh].G_iw)
 
             # some printout of the obtained density matrices and some basic checks
             density_shell[icrsh] = S[icrsh].G_iw.total_density()

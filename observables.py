@@ -315,7 +315,11 @@ def calc_obs(observables, general_parameters, solver_parameters, it, S, h_int, d
                                         observables["h_loc_diag"][icrsh][-1])
             else:
                 #calc energy for given S and G
-                print('\n Warning: calculating the interaction with unstable Migdal formula, consider turing on measure density matrix to use the more stable trace_rho_op function \n')
+                warning = ( "!-------------------------------------------------------------------------------------------!\n"
+                            "! WARNING: calculating interaction energy using Migdal formula                              !\n"
+                            "! consider turning on measure density matrix to use the more stable trace_rho_op function   !\n"
+                            "!-------------------------------------------------------------------------------------------!" )
+                print warning
 
                 E_int[icrsh] = 0.5 * (S[icrsh].G_iw* S[icrsh].Sigma_iw).total_density()
 
