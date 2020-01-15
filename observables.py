@@ -335,7 +335,7 @@ def calc_obs(observables, general_parameters, solver_parameters, it, S, h_int, d
 
     for icrsh in range(sum_k.n_inequiv_shells):
         if general_parameters['dc_type'] >= 0:
-            observables['E_DC'][icrsh].append(shell_multiplicity[icrsh]*sum_k.dc_energ[sum_k.inequiv_to_corr[icrsh]])
+            observables['E_DC'][icrsh].append(shell_multiplicity[icrsh]*SK.dc_energ[SK.inequiv_to_corr[icrsh]])
         else:
             observables['E_DC'][icrsh].append(0.0)
 
