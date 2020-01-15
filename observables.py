@@ -333,7 +333,11 @@ def calc_obs(observables, general_parameters, solver_parameters, it, S, h_int, d
     E_tot = E_dft + E_bandcorr + E_corr_en
     observables['E_tot'].append(E_tot)
 
-    for icrsh in range(0,SK.n_inequiv_shells):
+    for icrsh in range(sum_k.n_inequiv_shells):
+        if general_parameters['dc_type'] >= 0:
+            observables['E_DC'][icrsh].append(shell_multiplicity[icrsh]*sum_k.dc_energ[sum_k.inequiv_to_corr[icrsh]])
+        else:
+            observables['E_DC'][icrsh].append(0.0)
 
         gb2_imp_up = 0.0
         gb2_imp_down = 0.0
