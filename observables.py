@@ -28,7 +28,6 @@ except ImportError:
 
 import toolset
 
-
 def prep_observables(general_parameters, h5_archive):
     """
     prepares the observable arrays and files for the DMFT calculation
@@ -62,36 +61,25 @@ def prep_observables(general_parameters, h5_archive):
         observables['mu'] = []
         observables['E_tot'] = []
         observables['E_bandcorr'] = []
-        observables['E_int'] = []
+        observables['E_int'] = [[] for _ in range(n_inequiv_shells)]
         observables['E_corr_en'] = []
         observables['E_dft'] = []
-        observables['E_DC'] = []
-        observables['orb_gb2'] = []
-        observables['imp_gb2'] = []
-        observables['orb_occ'] = []
-        observables['imp_occ'] = []
-        observables['rho'] = []
-        observables['h_loc'] = []
-        observables['h_loc_diag'] = []
-        for icrsh in range(0,n_inequiv_shells):
-
-            observables['E_int'].append([])
-            observables['E_DC'].append([])
-            observables['rho'].append([])
-            observables['h_loc'].append([])
-            observables['h_loc_diag'].append([])
-            observables['orb_gb2'].append({'up': [], 'down': []})
-            observables['imp_gb2'].append({'up': [], 'down': []})
-            observables['orb_occ'].append({'up': [], 'down': []})
-            observables['imp_occ'].append({'up': [], 'down': []})
+        observables['E_DC'] = [[] for _ in range(n_inequiv_shells)]
+        observables['orb_gb2'] = [{'up': [], 'down': []} for _ in range(n_inequiv_shells)]
+        observables['imp_gb2'] = [{'up': [], 'down': []} for _ in range(n_inequiv_shells)]
+        observables['orb_occ'] = [{'up': [], 'down': []} for _ in range(n_inequiv_shells)]
+        observables['imp_occ'] = [{'up': [], 'down': []} for _ in range(n_inequiv_shells)]
+        observables['rho'] = [[] for _ in range(n_inequiv_shells)]
+        observables['h_loc'] = [[] for _ in range(n_inequiv_shells)]
+        observables['h_loc_diag'] = [[] for _ in range(n_inequiv_shells)]
 
     # prepare observable files
     if not 'iteration_count' in h5_archive['DMFT_results']:
-        prepare_obs_files(general_parameters,n_inequiv_shells)
+        prepare_obs_files(general_parameters, n_inequiv_shells)
 
     return observables
 
-def prepare_obs_files(general_parameters,n_inequiv_shells):
+def prepare_obs_files(general_parameters, n_inequiv_shells):
     """
     prepares the observable files for writing
 
@@ -151,7 +139,7 @@ def prepare_obs_files(general_parameters,n_inequiv_shells):
 
     return
 
-def calc_obs(observables, general_parameters, solver_parameters, it, S, h_int, dft_mu, previous_mu, SK, G_loc_all_dft, density_mat_dft, density_mat, shell_multiplicity, E_bandcorr):
+def calc_obs(observables, general_parameters, solver_parameters, it, solvers, h_int, dft_mu, previous_mu, sum_k, G_loc_all_dft, density_mat_dft, density_mat, shell_multiplicity, E_bandcorr):
     """
     calculates the observables for given Input, I decided to calculate the observables
     not adhoc since it should be done only once by the master_node
@@ -166,7 +154,7 @@ def calc_obs(observables, general_parameters, solver_parameters, it, S, h_int, d
 
     it : iteration counter
 
-    S : Solver instances
+    solvers : Solver instances
 
     h_int : interaction hamiltonian
 
@@ -174,7 +162,7 @@ def calc_obs(observables, general_parameters, solver_parameters, it, S, h_int, d
 
     previous_mu : dmft chemical potential for which the calculation was just done
 
-    SK : SumK Object instances
+    sum_k : SumK Object instances
 
     G_loc_all_dft : Gloc from DFT for G(beta/2)
 
@@ -184,23 +172,16 @@ def calc_obs(observables, general_parameters, solver_parameters, it, S, h_int, d
 
     shell_multiplicity : degeneracy of impurities
 
-    E_dft: latest dft energy
-
-    E_bandcorr : E_kin_dmft - E_kin_dft, either calculated man or from SK method if CSC
-
-    E_int : array of interaction energies for each imp
-
-    E_corr_en : total interaction energy for whole unit cell - Impurity DC energy
+    E_bandcorr : E_kin_dmft - E_kin_dft, either calculated man or from sum_k method if CSC
 
     __Returns:__
 
     observables: list of dicts
     """
 
-
-    # empty energy values
+    # init energy values
     E_dft = 0.0
-    E_int = np.zeros(SK.n_inequiv_shells)
+    E_int = np.zeros(sum_k.n_inequiv_shells)
     E_corr_en = 0.0
 
     if general_parameters['csc']:
@@ -216,11 +197,11 @@ def calc_obs(observables, general_parameters, solver_parameters, it, S, h_int, d
         observables['E_dft'].append(E_dft)
         observables['E_tot'].append(E_dft)
 
-        for icrsh in range(0,SK.n_inequiv_shells):
+        for icrsh in range(sum_k.n_inequiv_shells):
             # determine number of orbitals per shell
             observables['E_int'][icrsh].append(0.0)
-            if (general_parameters['dc_type'] >= 0):
-                observables['E_DC'][icrsh].append(shell_multiplicity[icrsh]*SK.dc_energ[SK.inequiv_to_corr[icrsh]])
+            if general_parameters['dc_type'] >= 0:
+                observables['E_DC'][icrsh].append(shell_multiplicity[icrsh]*sum_k.dc_energ[sum_k.inequiv_to_corr[icrsh]])
             else:
                 observables['E_DC'][icrsh].append(0.0)
 
@@ -234,14 +215,13 @@ def calc_obs(observables, general_parameters, solver_parameters, it, S, h_int, d
             occ_orb_down = []
 
             # iterate over all spin channels and add the to up or down
-            for spin_channel, elem in SK.gf_struct_solver[icrsh].iteritems():
+            for spin_channel, _ in sum_k.gf_struct_solver[icrsh].iteritems():
 
                 # G(beta/2)
-                G_tau = GfImTime(indices=S[icrsh].G_tau_man[spin_channel].indices,
-                                beta=general_parameters['beta'])
+                G_tau = GfImTime(indices=solvers[icrsh].G_tau_man[spin_channel].indices,
+                                 beta=general_parameters['beta'])
                 G_tau << InverseFourier(G_loc_all_dft[icrsh][spin_channel])
 
-                mesh_len = len(G_tau.data)
                 mesh_mid = int(len(G_tau.data)/2)
                 # since G(tau) has always 10001 values we are sampling +-10 values
                 # hard coded, for beta=40 this corresponds to approx +-0.05
@@ -251,7 +231,7 @@ def calc_obs(observables, general_parameters, solver_parameters, it, S, h_int, d
                 # taking the diagonal elements of the sum of the G(beta/2) matrices
                 gb2_list = np.diagonal(np.real(sum(gg)/float(2*samp)))
 
-                for orb, value in enumerate(gb2_list):
+                for value in gb2_list:
                     if 'up' in spin_channel:
                         gb2_orb_up.append(value)
                         gb2_imp_up += value
@@ -261,13 +241,13 @@ def calc_obs(observables, general_parameters, solver_parameters, it, S, h_int, d
 
                 # occupation per orbital
                 den_mat = density_mat_dft[icrsh][spin_channel]
-                for i in range(0,len(np.real(den_mat)[0,:])):
+                for i in range(len(np.real(den_mat)[0, :])):
                     if 'up' in spin_channel:
-                        occ_orb_up.append(np.real(den_mat)[i,i])
-                        occ_imp_up += np.real(den_mat)[i,i]
+                        occ_orb_up.append(np.real(den_mat)[i, i])
+                        occ_imp_up += np.real(den_mat)[i, i]
                     else:
-                        occ_orb_down.append(np.real(den_mat)[i,i])
-                        occ_imp_down += np.real(den_mat)[i,i]
+                        occ_orb_down.append(np.real(den_mat)[i, i])
+                        occ_imp_down += np.real(den_mat)[i, i]
 
             # adding those values to the observable object
             observables['orb_gb2'][icrsh]['up'].append(gb2_orb_up)
@@ -283,7 +263,7 @@ def calc_obs(observables, general_parameters, solver_parameters, it, S, h_int, d
             observables['imp_occ'][icrsh]['down'].append(occ_imp_down)
 
         # write the DFT observables to the files
-        write_obs(observables,SK,general_parameters)
+        write_obs(observables, sum_k, general_parameters)
 
 
     # now the normal output from each iteration
@@ -294,21 +274,21 @@ def calc_obs(observables, general_parameters, solver_parameters, it, S, h_int, d
 
     # if density matrix was measured store result in observables
     if solver_parameters["measure_density_matrix"]:
-        for icrsh in range(SK.n_inequiv_shells):
+        for icrsh in range(sum_k.n_inequiv_shells):
             if icrsh == 0:
                 mpi.report("\nextracting the impurity density matrix")
             # Extract accumulated density matrix
-            observables["rho"][icrsh].append( S[icrsh].density_matrix )
+            observables["rho"][icrsh].append( solvers[icrsh].density_matrix )
 
             # storing the local Hamiltonian
-            observables["h_loc"][icrsh].append( S[icrsh].h_loc )
+            observables["h_loc"][icrsh].append( solvers[icrsh].h_loc )
 
             # Object containing eigensystem of the local Hamiltonian
-            observables["h_loc_diag"][icrsh].append( S[icrsh].h_loc_diagonalization )
+            observables["h_loc_diag"][icrsh].append( solvers[icrsh].h_loc_diagonalization )
 
     if general_parameters['calc_energies']:
         # dmft interaction energy with E_int = 0.5 * Tr[Sigma * G]
-        for icrsh in range(SK.n_inequiv_shells):
+        for icrsh in range(sum_k.n_inequiv_shells):
             if solver_parameters["measure_density_matrix"]:
                 E_int[icrsh] = trace_rho_op(observables["rho"][icrsh][-1],
                                         h_int[icrsh],
@@ -321,10 +301,10 @@ def calc_obs(observables, general_parameters, solver_parameters, it, S, h_int, d
                             "!-------------------------------------------------------------------------------------------!" )
                 print warning
 
-                E_int[icrsh] = 0.5 * (S[icrsh].G_iw* S[icrsh].Sigma_iw).total_density()
+                E_int[icrsh] = 0.5 * (solvers[icrsh].G_iw* solvers[icrsh].Sigma_iw).total_density()
 
             observables['E_int'][icrsh].append(float(shell_multiplicity[icrsh]*E_int[icrsh]))
-            E_corr_en += shell_multiplicity[icrsh]*E_int[icrsh] - shell_multiplicity[icrsh]*SK.dc_energ[SK.inequiv_to_corr[icrsh]]
+            E_corr_en += shell_multiplicity[icrsh]*E_int[icrsh] - shell_multiplicity[icrsh]*sum_k.dc_energ[sum_k.inequiv_to_corr[icrsh]]
 
 
     observables['E_corr_en'].append(E_corr_en)
@@ -333,9 +313,9 @@ def calc_obs(observables, general_parameters, solver_parameters, it, S, h_int, d
     E_tot = E_dft + E_bandcorr + E_corr_en
     observables['E_tot'].append(E_tot)
 
-    for icrsh in range(SK.n_inequiv_shells):
+    for icrsh in range(sum_k.n_inequiv_shells):
         if general_parameters['dc_type'] >= 0:
-            observables['E_DC'][icrsh].append(shell_multiplicity[icrsh]*SK.dc_energ[SK.inequiv_to_corr[icrsh]])
+            observables['E_DC'][icrsh].append(shell_multiplicity[icrsh]*sum_k.dc_energ[sum_k.inequiv_to_corr[icrsh]])
         else:
             observables['E_DC'][icrsh].append(0.0)
 
@@ -350,20 +330,20 @@ def calc_obs(observables, general_parameters, solver_parameters, it, S, h_int, d
 
 
         # iterate over all spin channels and add the to up or down
-        for spin_channel, elem in SK.gf_struct_solver[icrsh].iteritems():
+        for spin_channel, _ in sum_k.gf_struct_solver[icrsh].iteritems():
 
             # G(beta/2)
-            mesh_len = len(S[icrsh].G_tau_man[spin_channel].data)
-            mesh_mid = int(len(S[icrsh].G_tau_man[spin_channel].data)/2)
+#            mesh_len = len(solvers[icrsh].G_tau_man[spin_channel].data)
+            mesh_mid = int(len(solvers[icrsh].G_tau_man[spin_channel].data)/2)
             # since G(tau) has always 10001 values we are sampling +-10 values
             # hard coded, for beta=40 this corresponds to approx +-0.05
             samp = 10
             # we are sampling a few values around G(beta/2+-0.05)
-            gg = S[icrsh].G_tau_man[spin_channel].data[mesh_mid-samp:mesh_mid+samp]
+            gg = solvers[icrsh].G_tau_man[spin_channel].data[mesh_mid-samp:mesh_mid+samp]
             # taking the diagonal elements of the sum of the G(beta/2) matrices
             gb2_list = np.diagonal(np.real(sum(gg)/float(2*samp)))
 
-            for orb, value in enumerate(gb2_list):
+            for value in gb2_list:
                 if 'up' in spin_channel:
                     gb2_orb_up.append(value)
                     gb2_imp_up += value
@@ -373,13 +353,13 @@ def calc_obs(observables, general_parameters, solver_parameters, it, S, h_int, d
 
             # occupation per orbital and impurity
             den_mat = density_mat[icrsh][spin_channel]
-            for i in range(0,len(np.real(den_mat)[0,:])):
+            for i in range(len(np.real(den_mat)[0, :])):
                 if 'up' in spin_channel:
-                    occ_orb_up.append(np.real(den_mat)[i,i])
-                    occ_imp_up += np.real(den_mat)[i,i]
+                    occ_orb_up.append(np.real(den_mat)[i, i])
+                    occ_imp_up += np.real(den_mat)[i, i]
                 else:
-                    occ_orb_down.append(np.real(den_mat)[i,i])
-                    occ_imp_down += np.real(den_mat)[i,i]
+                    occ_orb_down.append(np.real(den_mat)[i, i])
+                    occ_imp_down += np.real(den_mat)[i, i]
 
         # adding those values to the observable object
         observables['orb_gb2'][icrsh]['up'].append(gb2_orb_up)
@@ -396,7 +376,7 @@ def calc_obs(observables, general_parameters, solver_parameters, it, S, h_int, d
 
     return observables
 
-def write_obs(observables,SK,general_parameters):
+def write_obs(observables, sum_k, general_parameters):
     """
     writes the last entries of the observable arrays to the files
 
@@ -405,7 +385,7 @@ def write_obs(observables,SK,general_parameters):
     observables : list of dicts
         observable arrays/dicts
 
-    SK : SumK Object instances
+    sum_k : SumK Object instances
 
     general_parameters : dict
 
@@ -416,104 +396,101 @@ def write_obs(observables,SK,general_parameters):
     """
 
     if general_parameters['magnetic']:
-        obs_files = {}
-        for spin in ['up','down']:
-            obs_files[spin] = []
-
+        obs_files = {'up': [], 'down': []}
     else:
         obs_files = []
 
     # open obs files
-    nfiles = SK.n_inequiv_shells
-    for ifile in range(0,nfiles):
+    nfiles = sum_k.n_inequiv_shells
+    for ifile in range(nfiles):
         if general_parameters['magnetic']:
             obs_files['up'].append(open(general_parameters['jobname']+'/'+
-                                    'observables_imp'+str(ifile)+'_up.dat', 'a'))
+                                        'observables_imp'+str(ifile)+'_up.dat', 'a'))
             obs_files['down'].append(open(general_parameters['jobname']+'/'+
-                                    'observables_imp'+str(ifile)+'_down.dat', 'a'))
+                                          'observables_imp'+str(ifile)+'_down.dat', 'a'))
         else:
             obs_files.append(open(general_parameters['jobname']+'/'+
-                            'observables_imp'+str(ifile)+'.dat', 'a'))
+                                  'observables_imp'+str(ifile)+'.dat', 'a'))
 
-    for icrsh in range(0,SK.n_inequiv_shells):
+    for icrsh in range(sum_k.n_inequiv_shells):
 
         if general_parameters['magnetic']:
-            for spin in ['up','down']:
-                obs_files[spin][icrsh].write("{:3d}".format(observables['iteration'][-1]))
+            for spin in ['up', 'down']:
+                obs_files[spin][icrsh].write('{:3d}'.format(observables['iteration'][-1]))
                 obs_files[spin][icrsh].write('  ')
-                obs_files[spin][icrsh].write("{:10.5f}".format(observables['mu'][-1]))
+                obs_files[spin][icrsh].write('{:10.5f}'.format(observables['mu'][-1]))
                 obs_files[spin][icrsh].write('  ')
 
                 for i, item in enumerate(observables['orb_gb2'][icrsh][spin][-1]):
-                    obs_files[spin][icrsh].write("{:10.5f}".format(item))
+                    obs_files[spin][icrsh].write('{:10.5f}'.format(item))
                     obs_files[spin][icrsh].write('  ')
 
                 for i, item in enumerate(observables['orb_occ'][icrsh][spin][-1]):
-                    obs_files[spin][icrsh].write("{:10.5f}".format(item))
+                    obs_files[spin][icrsh].write('{:10.5f}'.format(item))
                     obs_files[spin][icrsh].write('  ')
 
-                obs_files[spin][icrsh].write("{:10.5f}".format(observables['imp_occ'][icrsh][spin][-1]))
+                obs_files[spin][icrsh].write('{:10.5f}'.format(observables['imp_occ'][icrsh][spin][-1]))
 
                 if general_parameters['calc_energies']:
                     obs_files[spin][icrsh].write('  ')
-                    obs_files[spin][icrsh].write("{:10.5f}".format(observables['E_tot'][-1]))
+                    obs_files[spin][icrsh].write('{:10.5f}'.format(observables['E_tot'][-1]))
                     obs_files[spin][icrsh].write('  ')
-                    obs_files[spin][icrsh].write("{:10.5f}".format(observables['E_dft'][-1]))
+                    obs_files[spin][icrsh].write('{:10.5f}'.format(observables['E_dft'][-1]))
                     obs_files[spin][icrsh].write('  ')
-                    obs_files[spin][icrsh].write("{:10.5f}".format(observables['E_bandcorr'][-1]))
+                    obs_files[spin][icrsh].write('{:10.5f}'.format(observables['E_bandcorr'][-1]))
                     obs_files[spin][icrsh].write('  ')
-                    obs_files[spin][icrsh].write("{:10.5f}".format(observables['E_int'][icrsh][-1]))
+                    obs_files[spin][icrsh].write('{:10.5f}'.format(observables['E_int'][icrsh][-1]))
                     obs_files[spin][icrsh].write('  ')
-                    obs_files[spin][icrsh].write("{:10.5f}".format(observables['E_DC'][icrsh][-1]))
+                    obs_files[spin][icrsh].write('{:10.5f}'.format(observables['E_DC'][icrsh][-1]))
 
                 obs_files[spin][icrsh].write('\n')
         else:
             # adding up the spin channels
-            obs_files[icrsh].write("{:3d}".format(observables['iteration'][-1]))
+            obs_files[icrsh].write('{:3d}'.format(observables['iteration'][-1]))
             obs_files[icrsh].write('  ')
-            obs_files[icrsh].write("{:10.5f}".format(observables['mu'][-1]))
+            obs_files[icrsh].write('{:10.5f}'.format(observables['mu'][-1]))
             obs_files[icrsh].write('  ')
 
             for i, item in enumerate(observables['orb_gb2'][icrsh]['up'][-1]):
                 val = (observables['orb_gb2'][icrsh]['up'][-1][i]+
                        observables['orb_gb2'][icrsh]['down'][-1][i])
-                obs_files[icrsh].write("{:10.5f}".format(val))
+                obs_files[icrsh].write('{:10.5f}'.format(val))
                 obs_files[icrsh].write('  ')
 
             for i, item in enumerate(observables['orb_occ'][icrsh]['up'][-1]):
                 val = (observables['orb_occ'][icrsh]['up'][-1][i]+
                        observables['orb_occ'][icrsh]['down'][-1][i])
-                obs_files[icrsh].write("{:10.5f}".format(val))
+                obs_files[icrsh].write('{:10.5f}'.format(val))
                 obs_files[icrsh].write('  ')
 
             val = observables['imp_occ'][icrsh]['up'][-1]+observables['imp_occ'][icrsh]['down'][-1]
-            obs_files[icrsh].write("{:10.5f}".format(val))
+            obs_files[icrsh].write('{:10.5f}'.format(val))
 
             if general_parameters['calc_energies']:
                 obs_files[icrsh].write('  ')
-                obs_files[icrsh].write("{:10.5f}".format(observables['E_tot'][-1]))
+                obs_files[icrsh].write('{:10.5f}'.format(observables['E_tot'][-1]))
                 obs_files[icrsh].write('  ')
-                obs_files[icrsh].write("{:10.5f}".format(observables['E_dft'][-1]))
+                obs_files[icrsh].write('{:10.5f}'.format(observables['E_dft'][-1]))
                 obs_files[icrsh].write('  ')
-                obs_files[icrsh].write("{:10.5f}".format(observables['E_bandcorr'][-1]))
+                obs_files[icrsh].write('{:10.5f}'.format(observables['E_bandcorr'][-1]))
                 obs_files[icrsh].write('  ')
-                obs_files[icrsh].write("{:10.5f}".format(observables['E_int'][icrsh][-1]))
+                obs_files[icrsh].write('{:10.5f}'.format(observables['E_int'][icrsh][-1]))
                 obs_files[icrsh].write('  ')
-                obs_files[icrsh].write("{:10.5f}".format(observables['E_DC'][icrsh][-1]))
+                obs_files[icrsh].write('{:10.5f}'.format(observables['E_DC'][icrsh][-1]))
 
             obs_files[icrsh].write('\n')
 
     # closing the files
-    for ifile in range(0,nfiles):
+    for ifile in range(nfiles):
         if general_parameters['magnetic']:
-            for spin in ['up','down']:
+            for spin in ['up', 'down']:
                 obs_files[spin][ifile].close()
         else:
             obs_files[ifile].close()
 
     return
 
-def calc_dft_kin_en(general_parameters, SK, dft_mu):
+def calc_dft_kin_en(general_parameters, sum_k, dft_mu):
     """
     Calculates the kinetic energy from DFT for target states
 
@@ -522,7 +499,7 @@ def calc_dft_kin_en(general_parameters, SK, dft_mu):
     general_parameters : dict
         general parameters as a dict
 
-    SK : SumK Object instances
+    sum_k : SumK Object instances
 
     dft_mu: float
         DFT fermi energy
@@ -534,24 +511,25 @@ def calc_dft_kin_en(general_parameters, SK, dft_mu):
 
     """
 
-    H_ks = SK.hopping
-    num_kpts = SK.n_k
+    H_ks = sum_k.hopping
+    num_kpts = sum_k.n_k
     E_kin = 0.0+0.0j
-    ikarray = np.array(range(SK.n_k))
+    ikarray = np.array(range(sum_k.n_k))
     for ik in mpi.slice_array(ikarray):
-        nb = int(SK.n_orbitals[ik])
+        nb = int(sum_k.n_orbitals[ik])
         # calculate lattice greens function
-        G_iw_lat = SK.lattice_gf(ik,
-                                beta=general_parameters['beta'],
-                                with_Sigma=False,mu=dft_mu).copy()
+        G_iw_lat = sum_k.lattice_gf(ik,
+                                    beta=general_parameters['beta'],
+                                    with_Sigma=False, mu=dft_mu).copy()
         # calculate G(beta) via the function density, which is the same as fourier trafo G(w) and taking G(b)
         G_iw_lat_beta = G_iw_lat.density()
         # Doing the formula
-        E_kin += np.trace(np.dot(H_ks[ik,0,:nb,:nb],G_iw_lat_beta['up'][:,:])) + np.trace(np.dot(H_ks[ik,0,:nb,:nb],G_iw_lat_beta['down'][:,:]))
+        E_kin += np.trace(np.dot(H_ks[ik, 0, :nb, :nb], G_iw_lat_beta['up'][:, :]))
+        E_kin += np.trace(np.dot(H_ks[ik, 0, :nb, :nb], G_iw_lat_beta['down'][:, :]))
     E_kin = float(E_kin.real)
 
     # collect data and put into E_kin_dft
-    E_kin_dft = mpi.all_reduce(mpi.world, E_kin, lambda x,y : x+y)
+    E_kin_dft = mpi.all_reduce(mpi.world, E_kin, lambda x, y: x+y)
     mpi.barrier()
     # E_kin should be divided by the number of k-points
     E_kin_dft = E_kin_dft/num_kpts
@@ -561,7 +539,7 @@ def calc_dft_kin_en(general_parameters, SK, dft_mu):
 
     return E_kin_dft
 
-def calc_bandcorr_man(general_parameters, SK, E_kin_dft):
+def calc_bandcorr_man(general_parameters, sum_k, E_kin_dft):
     """
     Calculates the correlated kinetic energy from DMFT for target states
     and then determines the band correction energy
@@ -571,7 +549,7 @@ def calc_bandcorr_man(general_parameters, SK, E_kin_dft):
     general_parameters : dict
         general parameters as a dict
 
-    SK : SumK Object instances
+    sum_k : SumK Object instances
 
     E_kin_dft: float
         kinetic energy from DFT
@@ -582,25 +560,26 @@ def calc_bandcorr_man(general_parameters, SK, E_kin_dft):
         band energy correction E_kin_dmft - E_kin_dft
 
     """
-    E_kin_dmft = 0.0+0.0j
-    E_kin = 0.0+0.0j
-    H_ks = SK.hopping
-    num_kpts = SK.n_k
+    E_kin_dmft = 0.0j
+    E_kin = 0.0j
+    H_ks = sum_k.hopping
+    num_kpts = sum_k.n_k
 
     # kinetic energy from dmft lattice Greens functions
-    ikarray = np.array(range(SK.n_k))
+    ikarray = np.array(range(sum_k.n_k))
     for ik in mpi.slice_array(ikarray):
-        nb = int(SK.n_orbitals[ik])
+        nb = int(sum_k.n_orbitals[ik])
         # calculate lattice greens function
-        G_iw_lat = SK.lattice_gf(ik,beta=general_parameters['beta'],with_Sigma=True,with_dc=True).copy()
+        G_iw_lat = sum_k.lattice_gf(ik, beta=general_parameters['beta'], with_Sigma=True, with_dc=True).copy()
         # calculate G(beta) via the function density, which is the same as fourier trafo G(w) and taking G(b)
         G_iw_lat_beta = G_iw_lat.density()
         # Doing the formula
-        E_kin += np.trace(np.dot(H_ks[ik,0,:nb,:nb],G_iw_lat_beta['up'][:,:])) + np.trace(np.dot(H_ks[ik,0,:nb,:nb],G_iw_lat_beta['down'][:,:]))
+        E_kin += np.trace(np.dot(H_ks[ik, 0, :nb, :nb], G_iw_lat_beta['up'][:, :]))
+        E_kin += np.trace(np.dot(H_ks[ik, 0, :nb, :nb], G_iw_lat_beta['down'][:, :]))
     E_kin = float(E_kin.real)
 
     # collect data and put into E_kin_dmft
-    E_kin_dmft = mpi.all_reduce(mpi.world, E_kin, lambda x,y : x+y)
+    E_kin_dmft = mpi.all_reduce(mpi.world, E_kin, lambda x, y: x+y)
     mpi.barrier()
     # E_kin should be divided by the number of k-points
     E_kin_dmft = E_kin_dmft/num_kpts

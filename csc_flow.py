@@ -93,10 +93,11 @@ def activate_vasp():
     if mpi.is_master_node():
         open('./vasp.lock', 'a').close()
     mpi.barrier()
+    return
 
 
 # Main CSC flow method
-def csc_flow_control(general_parameters, solver_parameters, dft_parameters):
+def csc_flow_control(general_parameters, solver_parameters, dft_parameters, advanced_parameters):
     """
     function to run the csc cycle. It writes and removes the vasp.lock file to
     start and stop Vasp, run the converter, run the dmft cycle and abort the job
@@ -110,6 +111,8 @@ def csc_flow_control(general_parameters, solver_parameters, dft_parameters):
         solver parameters as a dict
     dft_parameters : dict
         dft parameters as a dict
+    advanced_parameters : dict
+        advanced parameters as a dict
 
     __Returns:__
     nothing
@@ -120,39 +123,38 @@ def csc_flow_control(general_parameters, solver_parameters, dft_parameters):
                                             dft_parameters['executable'],
                                             dft_parameters['mpi_env'])
 
-    mpi.report("  Waiting for VASP lock to appear...")
+    mpi.report('  Waiting for VASP lock to appear...')
     while not toolset.is_vasp_lock_present():
         time.sleep(1)
 
     # if GAMMA file already exists, load it by doing an extra DFT iteration
     if os.path.exists('GAMMA'):
-        iter= -8
+        iter = -8
     else:
         iter = 0
 
     iter_dmft = 0
-    start_time_dft = timer()
+    start_dft = timer()
     while iter_dmft < general_parameters['n_iter_dmft']:
-
-        mpi.report("  Waiting for VASP lock to disappear...")
+        mpi.report('  Waiting for VASP lock to disappear...')
         mpi.barrier()
-
         #waiting for vasp to finish
         while toolset.is_vasp_lock_present():
             time.sleep(1)
 
         # check if we should do a dmft iteration now
         iter += 1
-
         if (iter-1) % dft_parameters['n_iter'] != 0 or iter < 0:
             activate_vasp()
             continue
 
         # run the converter
         if mpi.is_master_node():
-            end_time_dft = timer()
+            end_dft = timer()
 
             # check for plo file for projectors
+            # Warning: if you plan to implement a W90 interface, make sure you
+            # understand what happens in the orbital and what in KS basis
             if not os.path.exists(general_parameters['plo_cfg']):
                 mpi.report('*** Input PLO config file not found! I was looking for '+str(general_parameters['plo_cfg'])+' ***')
                 mpi.MPI.COMM_WORLD.Abort(1)
@@ -163,32 +165,28 @@ def csc_flow_control(general_parameters, solver_parameters, dft_parameters):
             # create h5 archive or build updated H(k)
             Converter = VaspConverter(filename=general_parameters['seedname'])
 
-            # convert h5 archive now
+            # convert now h5 archive now
             Converter.convert_dft_input()
 
             # if wanted store eigenvalues in h5 archive
             if dft_parameters['store_eigenvals']:
-                toolset.store_dft_eigvals(config_file = general_parameters['plo_cfg'],
-                                  path_to_h5 = general_parameters['seedname']+'.h5',
-                                  iteration = iter_dmft+1)
+                toolset.store_dft_eigvals(config_file=general_parameters['plo_cfg'], path_to_h5=general_parameters['seedname']+'.h5', iteration=iter_dmft+1)
 
         mpi.barrier()
 
         if mpi.is_master_node():
-            print('')
-            print("="*80)
-            print('DFT cycle took %10.4f seconds'%(end_time_dft-start_time_dft))
-            print("calling dmft_cycle")
-            print("DMFT iteration"+str(iter_dmft+1)+"/"+str( general_parameters['n_iter_dmft']))
-            print("="*80)
-            print('')
+            print('\n' + '='*80)
+            print('DFT cycle took {:10.4f} seconds'.format(end_dft-start_dft))
+            print('calling dmft_cycle')
+            print('DMFT iteration', iter_dmft+1, '/', general_parameters['n_iter_dmft'])
+            print('='*80 + '\n')
 
         # if first iteration the h5 archive and observables need to be prepared
         if iter_dmft == 0:
             observables = dict()
             if mpi.is_master_node():
                 # basic H5 archive checks and setup
-                h5_archive = HDFArchive(general_parameters['seedname']+'.h5','a')
+                h5_archive = HDFArchive(general_parameters['seedname']+'.h5', 'a')
                 if not 'DMFT_results' in h5_archive:
                     h5_archive.create_group('DMFT_results')
                 if not 'last_iter' in h5_archive['DMFT_results']:
@@ -202,11 +200,11 @@ def csc_flow_control(general_parameters, solver_parameters, dft_parameters):
             observables = mpi.bcast(observables)
 
         if mpi.is_master_node():
-            start_time_dmft = timer()
+            start_dmft = timer()
 
         ############################################################
         # run the dmft_cycle
-        observables = dmft_cycle(general_parameters, solver_parameters, observables)
+        observables = dmft_cycle(general_parameters, solver_parameters, advanced_parameters, observables)
         ############################################################
 
         if iter_dmft == 0:
@@ -215,27 +213,26 @@ def csc_flow_control(general_parameters, solver_parameters, dft_parameters):
             iter_dmft += general_parameters['n_iter_dmft_per']
 
         if mpi.is_master_node():
-            end_time_dmft = timer()
-            print('')
-            print("="*80)
-            print('DMFT cycle took %10.4f seconds'%(end_time_dmft-start_time_dmft))
-            print("running VASP now")
-            print("="*80)
-            print('')
+            end_dmft = timer()
+            print('\n' + '='*80)
+            print('DMFT cycle took {:10.4f} seconds'.format(end_dmft-start_dmft))
+            print('running VASP now')
+            print('='*80 + '\n')
         #######
 
-        # create the lock file and Vasp will be unleashed
+        # remove the lock file and Vasp will be unleashed
         activate_vasp()
 
         # start the timer again for the dft loop
         if mpi.is_master_node():
-            start_time_dft = timer()
+            start_dft = timer()
 
     # stop if the maximum number of dmft iterations is reached
     if mpi.is_master_node():
-        print("\n  Maximum number of iterations reached.")
-        print("  Aborting VASP iterations...\n")
-        with open('STOPCAR', 'wt') as f_stop:
-            f_stop.write("LABORT = .TRUE.\n")
+        print('\n  Maximum number of iterations reached.')
+        print('  Aborting VASP iterations...\n')
+        f_stop = open('STOPCAR', 'wt')
+        f_stop.write('LABORT = .TRUE.\n')
+        f_stop.close()
         os.kill(vasp_process, signal.SIGTERM)
         mpi.MPI.COMM_WORLD.Abort(1)

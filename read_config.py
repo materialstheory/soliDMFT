@@ -1,16 +1,25 @@
-# provides the read_config function to read the config file
-# doc is created with https://github.com/freeman-lab/myopts
-# using the command: myopts read_config.py -o doc.md -s false
+"""
+Provides the read_config function to read the config file
+Doc is created with https://github.com/freeman-lab/myopts
+Using the command: myopts read_config.py -o doc.md -s false
+"""
 
-import configparser as cp
+import configparser
 import pytriqs.utility.mpi as mpi
+
+# TODO: create DefaultType that triqs.archive can write to file
+# TODO: does it make sense to not specify known defaults?
 
 def read_config(config_file):
     """
-    Reads the config file (default dmft_config.ini) it consists out of 2
-    sections. Comments are in general possible with with the delimiters ';' or
+    Reads the config file (default dmft_config.ini). It consists out of 2 or 3
+    sections, general, solver_parameters and optionally advanced_parameters.
+    Comments are in general possible with with the delimiters ';' or
     '#'. However, this is only possible in the beginning of a line not within
     the line!
+
+    For default values, the string 'none' is used. NoneType cannot be saved in
+    an h5 archive (in the framework that we are using).
 
     Parameters
     ----------
@@ -93,7 +102,8 @@ def read_config(config_file):
     set_rot : string, optional, default='none'
                 use density_mat_dft to diagonalize occupations = 'den'
                 use hloc_dft to diagonalize occupations = 'hloc'
-
+    oneshot_postproc_gamma_file : bool, optional, default=False
+                write the GAMMA file for vasp after completed one-shot calculations
 
     __Solver Parameters:__
     ----------
@@ -108,7 +118,7 @@ def read_config(config_file):
     max_time : int, optional, default=-1
                 maximum amount the solver is allowed to spend in eacht iteration
     imag_threshold : float, optional, default= 10e-15
-                thresold for imag part of G0_tau. be warned if symmetries are off in projection scheme imag parts can occur in G0_tau
+                threshold for imag part of G0_tau. be warned if symmetries are off in projection scheme imag parts can occur in G0_tau
     measure_density_matrix : bool, optional, default=False
                 measures the impurity density matrix and sets also
                 use_norm_as_weight to true
@@ -136,23 +146,34 @@ def read_config(config_file):
     mpi_env : string, default= 'local'
                 selection for mpi env for DFT / VASP in default this will only call VASP as mpirun -np n_cores_dft dft_executable
 
+    __Advanced Parameters:__
+    ----------
+    dc_factor : float, optional, default = 'none' (corresponds to 1)
+                If given, scales the dc energy by multiplying with this factor, usually < 1
+    dc_fixed_value : float, optional, default = 'none'
+                If given, it sets the DC (energy/imp) to this fixed value. Overwrites EVERY other DC configuration parameter if DC is turned on
+
     __Returns:__
+    ----------
     general_parameters : dict
 
     solver_parameters : dict
 
     dft_parameters : dict
 
+    advanced_parameters : dict
+
     """
-    config = cp.ConfigParser()
+    config = configparser.ConfigParser()
     config.read(config_file)
 
-    solver_parameters = {}
     general_parameters = {}
+    solver_parameters = {}
     dft_parameters = {}
+    advanced_parameters = {}
 
     # required parameters
-    general_parameters['seedname'] = map(str, str(config['general']['seedname'].replace(" ","")).split(','))
+    general_parameters['seedname'] = map(str, str(config['general']['seedname'].replace(' ', '')).split(','))
     general_parameters['h_int_type'] = int(config['general']['h_int_type'])
     general_parameters['U'] = map(float, str(config['general']['U']).split(','))
     general_parameters['J'] = map(float, str(config['general']['J']).split(','))
@@ -208,13 +229,12 @@ def read_config(config_file):
             dft_parameters['mpi_env'] = str(config['dft']['mpi_env'])
         else:
             dft_parameters['mpi_env'] = 'local'
-
     else:
         general_parameters['csc'] = False
 
     # optional stuff
     if 'jobname' in config['general']:
-        general_parameters['jobname'] = map(str, str(config['general']['jobname'].replace(" ","")).split(','))
+        general_parameters['jobname'] = map(str, str(config['general']['jobname'].replace(' ', '')).split(','))
         if len(general_parameters['jobname']) != len(general_parameters['seedname']):
             mpi.report('*** jobname must have same length as seedname. ***')
             mpi.MPI.COMM_WORLD.Abort(1)
@@ -269,13 +289,13 @@ def read_config(config_file):
     if 'spin_names' in config['general']:
         general_parameters['spin_names'] = map(str, str(config['general']['spin_names']).split(','))
     else:
-        general_parameters['spin_names'] = ['up','down']
+        general_parameters['spin_names'] = ['up', 'down']
 
     if 'load_sigma' in config['general']:
         general_parameters['load_sigma'] = config['general'].getboolean('load_sigma')
     else:
         general_parameters['load_sigma'] = False
-    if general_parameters['load_sigma'] == True:
+    if general_parameters['load_sigma']:
         general_parameters['path_to_sigma'] = str(config['general']['path_to_sigma'])
     if 'load_sigma_iter' in config['general']:
         general_parameters['load_sigma_iter'] = int(config['general']['load_sigma_iter'])
@@ -306,6 +326,11 @@ def read_config(config_file):
     else:
         general_parameters['dft_mu'] = 0.0
 
+    if 'store_dft_eigenvals' in config['general']:
+        general_parameters['store_dft_eigenvals'] = config['general'].getboolean('store_dft_eigenvals')
+    else:
+        general_parameters['store_dft_eigenvals'] = False
+
     if 'afm_order' in config['general']:
         general_parameters['afm_order'] = config['general'].getboolean('afm_order')
     else:
@@ -316,55 +341,74 @@ def read_config(config_file):
     else:
         general_parameters['set_rot'] = 'none'
 
+    if 'oneshot_postproc_gamma_file' in config['general']:
+        general_parameters['oneshot_postproc_gamma_file'] = config['general'].getboolean('oneshot_postproc_gamma_file')
+    else:
+        general_parameters['oneshot_postproc_gamma_file'] = False
+
+
     # solver related parameters
     # required parameters
-    solver_parameters["length_cycle"] = int(config['solver_parameters']['length_cycle'])
-    solver_parameters["n_warmup_cycles"] = int(config['solver_parameters']['n_warmup_cycles'])
-    solver_parameters["n_cycles"] = int( float(config['solver_parameters']['n_cycles_tot']) / (mpi.size))
+    solver_parameters['length_cycle'] = int(config['solver_parameters']['length_cycle'])
+    solver_parameters['n_warmup_cycles'] = int(config['solver_parameters']['n_warmup_cycles'])
+    solver_parameters['n_cycles'] = int(float(config['solver_parameters']['n_cycles_tot'])) // mpi.size
     solver_parameters['measure_G_l'] = config['solver_parameters'].getboolean('measure_g_l')
 
     # optional stuff
     if 'max_time' in config['solver_parameters']:
-        solver_parameters["max_time"] = int(config['solver_parameters']['max_time'])
+        solver_parameters['max_time'] = int(config['solver_parameters']['max_time'])
 
     if 'imag_threshold' in config['solver_parameters']:
-        solver_parameters["imag_threshold"] = float(config['solver_parameters']['imag_threshold'])
+        solver_parameters['imag_threshold'] = float(config['solver_parameters']['imag_threshold'])
 
     if 'measure_g_tau' in config['solver_parameters']:
-        solver_parameters["measure_G_tau"] = config['solver_parameters'].getboolean('measure_g_tau')
+        solver_parameters['measure_G_tau'] = config['solver_parameters'].getboolean('measure_g_tau')
     else:
-        solver_parameters["measure_G_tau"] = True
+        solver_parameters['measure_G_tau'] = True
 
     if 'measure_density_matrix' in config['solver_parameters']:
-        solver_parameters["measure_density_matrix"] = config['solver_parameters'].getboolean('measure_density_matrix')
+        solver_parameters['measure_density_matrix'] = config['solver_parameters'].getboolean('measure_density_matrix')
         # also required to measure the density matrix
-        solver_parameters["use_norm_as_weight"] = True
+        solver_parameters['use_norm_as_weight'] = True
     else:
-        solver_parameters["measure_density_matrix"] = False
+        solver_parameters['measure_density_matrix'] = False
 
     if 'move_double' in config['solver_parameters']:
-        solver_parameters["move_double"] = config['solver_parameters'].getboolean('move_double')
+        solver_parameters['move_double'] = config['solver_parameters'].getboolean('move_double')
     else:
-        solver_parameters["move_double"] = True
+        solver_parameters['move_double'] = True
 
     #tailfitting only if legendre is off
-    if solver_parameters['measure_G_l'] == True:
+    if solver_parameters['measure_G_l']:
         # little workaround since #leg coefficients is not directly a solver parameter
-        general_parameters["n_LegCoeff"] = int(config['solver_parameters']['n_LegCoeff'])
-        solver_parameters["perform_tail_fit"] = False
+        general_parameters['n_LegCoeff'] = int(config['solver_parameters']['n_LegCoeff'])
+        solver_parameters['perform_tail_fit'] = False
     else:
         if 'perform_tail_fit' in config['solver_parameters']:
-            solver_parameters["perform_tail_fit"] = config['solver_parameters'].getboolean('perform_tail_fit')
+            solver_parameters['perform_tail_fit'] = config['solver_parameters'].getboolean('perform_tail_fit')
         else:
-            solver_parameters["perform_tail_fit"] = False
+            solver_parameters['perform_tail_fit'] = False
 
     if 'fit_max_moment' in config['solver_parameters']:
-        solver_parameters["fit_max_moment"] = int(config['solver_parameters']['fit_max_moment'])
+        solver_parameters['fit_max_moment'] = int(config['solver_parameters']['fit_max_moment'])
 
     if 'fit_min_n' in config['solver_parameters']:
-        solver_parameters["fit_min_n"] = int(config['solver_parameters']['fit_min_n'])
+        solver_parameters['fit_min_n'] = int(config['solver_parameters']['fit_min_n'])
 
     if 'fit_max_n' in config['solver_parameters']:
-        solver_parameters["fit_max_n"] = int(config['solver_parameters']['fit_max_n'])
+        solver_parameters['fit_max_n'] = int(config['solver_parameters']['fit_max_n'])
 
-    return general_parameters, solver_parameters, dft_parameters
+
+    # advanced parameters: non-standard DMFT settings
+    if 'advanced_parameters' in config and 'dc_factor' in config['advanced_parameters']:
+        advanced_parameters['dc_factor'] = float(config['advanced_parameters']['dc_factor'])
+    else:
+        advanced_parameters['dc_factor'] = 'none'
+
+    if 'advanced_parameters' in config and 'dc_fixed_value' in config['advanced_parameters']:
+        advanced_parameters['dc_fixed_value'] = float(config['advanced_parameters']['dc_fixed_value'])
+    else:
+        advanced_parameters['dc_fixed_value'] = 'none'
+
+
+    return general_parameters, solver_parameters, dft_parameters, advanced_parameters
