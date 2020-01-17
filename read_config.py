@@ -88,8 +88,6 @@ def read_config(config_file):
                 fixed mu calculations
     store_dft_eigenvals : bool, optional, default= False
                 stores the dft eigenvals from LOCPROJ file in h5 archive
-    rm_complex : bool, optional, default=False
-                removes the complex parts from G0 before the solver runs
     afm_order : bool, optional, default=False
                 copy self energies instead of solving explicitly for afm order
     set_rot : string, optional, default='none'
@@ -135,6 +133,8 @@ def read_config(config_file):
                 number of dft iterations per cycle
     dft_executable : string, default= 'vasp_std'
                 command for the DFT / VASP executable
+    mpi_env : string, default= 'local'
+                selection for mpi env for DFT / VASP in default this will only call VASP as mpirun -np n_cores_dft dft_executable
 
     __Returns:__
     general_parameters : dict
@@ -203,6 +203,11 @@ def read_config(config_file):
             dft_parameters['store_eigenvals'] = config['dft'].getboolean('store_eigenvals')
         else:
             dft_parameters['store_eigenvals'] = False
+
+        if 'mpi_env' in config['dft']:
+            dft_parameters['mpi_env'] = str(config['dft']['mpi_env'])
+        else:
+            dft_parameters['mpi_env'] = 'local'
 
     else:
         general_parameters['csc'] = False
@@ -300,11 +305,6 @@ def read_config(config_file):
         general_parameters['dft_mu'] = float(config['general']['dft_mu'])
     else:
         general_parameters['dft_mu'] = 0.0
-
-    if 'rm_complex' in config['general']:
-        general_parameters['rm_complex'] = config['general'].getboolean('rm_complex')
-    else:
-        general_parameters['rm_complex'] = False
 
     if 'afm_order' in config['general']:
         general_parameters['afm_order'] = config['general'].getboolean('afm_order')

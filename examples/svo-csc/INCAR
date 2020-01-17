@@ -1,39 +1,36 @@
 SYSTEM = SrVO3
-ENCUT = 400
-NWRITE = 2
-PREC = Normal
-ISPIN = 1   ! no spin=1
-ICHARG=5 ! 5 for fcsc calculations (communication with python)
-
-EDIFF = 1.E-06
-ISYM = -1 ! I don't think it works when using symmetries
-NELM=1000 ! to prevent VASP from stopping too early (either because EDIFF is reached or 60 iterations were done)
-NELMIN=1000
-NELMDL=-2 ! first perform 14 iterations to converge the KS wavefunction
-
-!! DOS energy window
-NEDOS = 3001
-
-!! Smearing procedure
-ISMEAR = -5 ! -4 (-5) Tetrahedron (with Bloechl), 0 Gaussian, 1,... Methfessel-Paxton
-SIGMA=0.01
-!! real/reci projection scheme
-LREAL = .FALSE. ! my master's voice told me to
-
-! ALGO Normal of IALGO = 90
-ALGO = Normal
-
-
-!! parallelization parameters
-NSIM = 2 ! 4 should increase performance
-NCORE = 6
-
+NCORE = 4
+NSIM = 10
 LMAXMIX=6
-LORBIT=14
+EDIFF = 1.E-10
+
+# CSC mode
+ISTART=1
+ICHARG= 5
+
+# DOS energy window
+NEDOS = 2001
+
+! switch off symmetries
+ISYM=-1
+
+! to prevent VASP from stopping
+NELM=1000
+NELMIN=1000
+NELMDL=-2
+
+# Smearing procedure
+ISMEAR = -5
+
+# the energy window to optimize projector channels
 EMIN = 3.9
 EMAX = 7.1
+
+# use the PAW channel optimization
+LORBIT=14
+
+# project to V d
 LOCPROJ = 2 : d : Pr
 
-!! write WAVECAR, CHGCAR
-LWAVE = .FALSE.
-LCHARG = .FALSE.
+LWAVE= TRUE
+LCHARG = TRUE

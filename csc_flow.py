@@ -28,7 +28,7 @@ from dmft_cycle import dmft_cycle
 
 # Functions for interaction with VASP
 
-def start_vasp_from_master_node(number_cores, vasp_command='vasp'):
+def start_vasp_from_master_node(number_cores, vasp_command, mpi_env):
 
     # get MPI env
     world = mpi.world
@@ -62,9 +62,14 @@ def start_vasp_from_master_node(number_cores, vasp_command='vasp'):
                     break
 
         # arguments for mpirun: for the scond node, mpirun starts VASP by using ssh, therefore we need to handover the env variables with -x
-        args = [exe, '-hostfile', hostfile, '-np', str(number_cores),
-                '-mca', 'mtl', '^psm2,ofi', '-x', 'LD_LIBRARY_PATH',
-                '-x', 'PATH', '-x', 'OMP_NUM_THREADS', vasp_command]
+        mpi_environments = {
+            'local' : [exe, '-np', str(number_cores), vasp_command],
+            'rusty' : [exe, '-hostfile', hostfile, '-np', str(number_cores),
+                       '-mca', 'mtl', '^psm2,ofi', '-x', 'LD_LIBRARY_PATH',
+                       '-x', 'PATH', '-x', 'OMP_NUM_THREADS', vasp_command]
+        }
+
+        args = mpi_environments[mpi_env]
 
         vasp_pid = os.fork()
         if vasp_pid == 0:
@@ -112,7 +117,8 @@ def csc_flow_control(general_parameters, solver_parameters, dft_parameters):
     """
 
     vasp_process = start_vasp_from_master_node(dft_parameters['n_cores'],
-                                            dft_parameters['executable'])
+                                            dft_parameters['executable'],
+                                            dft_parameters['mpi_env'])
 
     mpi.report("  Waiting for VASP lock to appear...")
     while not toolset.is_vasp_lock_present():

@@ -507,7 +507,7 @@ def dmft_cycle(general_parameters, solver_parameters, observables):
 
         # looping over inequiv shells and solving for each site seperately
         for icrsh in range(SK.n_inequiv_shells):
-
+            # copy the block of G_loc into the corresponding instance of the impurity solver
             S[icrsh].G_iw << G_loc_all[icrsh]
 
             density_shell_pre[icrsh] = S[icrsh].G_iw.total_density()
@@ -714,11 +714,9 @@ def dmft_cycle(general_parameters, solver_parameters, observables):
             previous_mu = SK.chemical_potential
             SK.calc_mu( precision = general_parameters['prec_mu'] )
 
+        # extract new G_loc
         G_loc_all = SK.extract_G_loc()
 
-        for icrsh in range(SK.n_inequiv_shells):
-            # copy the block of G_loc into the corresponding instance of the impurity solver
-            S[icrsh].G_iw << G_loc_all[icrsh]
 
         # saving results to h5 archive
         if mpi.is_master_node():
