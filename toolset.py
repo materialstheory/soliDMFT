@@ -10,29 +10,13 @@
 
 #import errno
 import numpy as np
-import os
 
 # triqs
 import pytriqs.utility.mpi as mpi
 from pytriqs.archive import HDFArchive
-try:
-    # TRIQS 2.0
-    from triqs_dft_tools.converters.plovasp.vaspio import VaspData
-except ImportError:
-    # TRIQS 1.4
-    from pytriqs.applications.dft.converters.plovasp.vaspio import VaspData
+from triqs_dft_tools.converters.plovasp.vaspio import VaspData
 
 
-def is_vasp_lock_present():
-    """
-    small function to check if vasp is still running
-    """
-    res_bool = False
-    if mpi.is_master_node():
-        res_bool = os.path.isfile('./vasp.lock')
-    mpi.barrier()
-    res_bool = mpi.bcast(res_bool)
-    return res_bool
 
 def store_dft_eigvals(config_file, path_to_h5, iteration):
     """

@@ -1,0 +1,101 @@
+FROM materialstheory/base-bionic-sci-python
+
+# set some compiler flags
+ENV CFLAGS="-m64 -O3 -Wl,--no-as-needed"
+ENV CXXFLAGS="-m64 -O3 -Wl,--no-as-needed"
+ENV LDFLAGS="-ldl -lm"
+ENV FFLAGS="-m64 -O3"
+
+# triqs
+RUN cd / && mkdir -p triqs && mkdir -p source
+
+RUN cd /source && git clone -b 2.2.x https://github.com/TRIQS/triqs triqs.src \
+    && mkdir -p triqs.build && cd triqs.build \
+    && cmake ../triqs.src -DCMAKE_INSTALL_PREFIX=/triqs \
+    && make -j$(nproc) && make -j$(nproc) test && make install
+
+ENV CPATH=/triqs/include:${CPATH} \
+    PATH=/triqs/bin:${PATH} \
+    LIBRARY_PATH=/triqs/lib:${LIBRARY_PATH} \
+    LD_LIBRARY_PATH=/triqs/lib:${LD_LIBRARY_PATH} \
+    PYTHONPATH=/triqs/lib/python2.7/site-packages:${PYTHONPATH} \
+    CMAKE_PREFIX_PATH=/triqs/share/cmake:${CMAKE_PREFIX_PATH}
+ENV TRIQS_ROOT=/triqs
+
+# dft_tools
+RUN cd /source && git clone -b 2.2.x https://github.com/TRIQS/dft_tools.git dft_tools.src \
+    && mkdir -p dft_tools.build && cd dft_tools.build \
+    && cmake ../dft_tools.src -DCMAKE_INSTALL_PREFIX=/triqs \
+    && make && make -j$(nproc) test && make install
+
+# cthyb
+RUN cd /source && git clone -b 2.2.x https://github.com/TRIQS/cthyb.git cthyb.src \
+    && mkdir -p cthyb.build && cd cthyb.build \
+    && cmake ../cthyb.src -DCMAKE_INSTALL_PREFIX=/triqs \
+    && make -j$(nproc) && make -j$(nproc) test && make install
+
+# maxent
+RUN cd /source && git clone https://github.com/TRIQS/maxent.git maxent.src \
+    && mkdir -p maxent.build && cd maxent.build \
+    && cmake ../maxent.src -DCMAKE_INSTALL_PREFIX=/triqs \
+    && make -j$(nproc) && make install
+
+# W90
+# Uncomment the lines in this and the following VASP block to have W90 as a library in VASP, allowing for the tag LWANNIER90=.TRUE.
+# RUN cd / && git clone -b v2.1 https://github.com/wannier-developers/wannier90.git wannier90 \
+#     && cd /wannier90 \
+#     # Using gfortran compiler - same as mpif90, mpif90 just links to it anyways
+#     && cp ./config/make.inc.gfort ./make.inc \
+#     # Make gfort use the intel libraries
+#     && sed -i 's@^LIBS.*@LIBS = -L${MKLROOT}/lib/intel64 -Wl,--no-as-needed -lmkl_gf_lp64 -lmkl_sequential -lmkl_core -lpthread -lm -ldl@' ./make.inc \
+#     && make default lib
+
+# VASP for CSC calculations
+ADD csc_vasp.tar.gz /vasp/
+# Set flags for W90 in the makefile.include
+# RUN cd /vasp/ && echo 'LLIBS += /wannier90/libwannier.a' >> makefile.include \
+#     && ex -s -c '9i|CPP_OPTIONS += -DVASP2WANNIER90v2' -c x makefile.include
+# Install vasp
+RUN cd /vasp/ \
+    && make std \
+    && rm -rf src/ build/ arch/
+
+ENV PATH=/vasp/bin:${PATH}
+
+# remove source
+RUN cd / && rm -rf source
+
+# create a useful work dir
+RUN cd / && mkdir work && cd work
+
+# make sure openmp does not start
+ENV OMP_NUM_THREADS=1
+
+# if you want more sophisticated jupyter installation uncomment this
+# make sure that jupyter lab is installed
+ RUN pip install --no-cache-dir future npm jupyter ipywidgets jupyterlab nodejs pandas shapely descartes ipympl pymatgen==2018.12.12
+#
+RUN apt-get update && \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends texlive dvipng texlive-latex-extra texlive-fonts-recommended nodejs npm python-backports.functools-lru-cache python-tk \
+    && \
+    apt-get autoremove --purge -y && \
+    apt-get autoclean -y && \
+    rm -rf /var/cache/apt/* /var/lib/apt/lists/*
+
+# jupyter lab extension
+RUN jupyter-labextension install @jupyter-widgets/jupyterlab-manager \
+    && jupyter-labextension install jupyter-matplotlib \
+    && jupyter-labextension install @jupyterlab/toc
+RUN jupyter-lab build
+
+# expose port for jupyter
+EXPOSE 8378
+
+COPY entrypoint.sh /usr/local/bin/entrypoint.sh
+COPY jupyter_start.sh /usr/local/bin/jupyter.sh
+
+RUN ["chmod", "+x", "/usr/local/bin/entrypoint.sh"]
+RUN ["chmod", "+x", "/usr/local/bin/jupyter.sh"]
+
+# change user and group id to match host machine if options are passed accordingly
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]

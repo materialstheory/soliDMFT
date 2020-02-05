@@ -7,9 +7,6 @@ Using the command: myopts read_config.py -o doc.md -s false
 import configparser
 import pytriqs.utility.mpi as mpi
 
-# TODO: create DefaultType that triqs.archive can write to file
-# TODO: does it make sense to not specify known defaults?
-
 def read_config(config_file):
     """
     Reads the config file (default dmft_config.ini). It consists out of 2 or 3
@@ -93,8 +90,8 @@ def read_config(config_file):
                 how many iterations should be considered for convergence?
     sampling_iterations : int, optional, default = 0
                 for how many iterations should the solution sampled after the CSC loop is converged
-    fixed_mu_value : float, optional default -> set fixed_mu = False
-                fixed mu calculations
+    fixed_mu_value : float, optional, default = 'none'
+                If given, the chemical potential remains fixed in calculations
     store_dft_eigenvals : bool, optional, default= False
                 stores the dft eigenvals from LOCPROJ file in h5 archive
     afm_order : bool, optional, default=False
@@ -137,7 +134,7 @@ def read_config(config_file):
 
     __DFT code parameters (only for csc):__
     ----------
-    n_cores_dft : int
+    n_cores : int
                 number of cores for the DFT code (VASP)
     n_iter_dft : int, optional, default = 6
                 number of dft iterations per cycle
@@ -185,9 +182,11 @@ def read_config(config_file):
 
     # if csc we need the following input Parameters
     if 'csc' in config['general']:
-
         general_parameters['csc'] = config['general'].getboolean('csc')
+    else:
+        general_parameters['csc'] = False
 
+    if general_parameters['csc']:
         if 'n_iter_dmft_first' in config['general']:
             general_parameters['n_iter_dmft_first'] = int(config['general']['n_iter_dmft_first'])
         else:
@@ -203,7 +202,7 @@ def read_config(config_file):
         else:
             general_parameters['plo_cfg'] = 'plo.cfg'
 
-        if general_parameters['csc'] and general_parameters['n_iter_dmft'] < general_parameters['n_iter_dmft_first']:
+        if general_parameters['n_iter_dmft'] < general_parameters['n_iter_dmft_first']:
             mpi.report('*** error: total number of iterations should be at least = n_iter_dmft_first ***')
             mpi.MPI.COMM_WORLD.Abort(1)
 
@@ -229,8 +228,6 @@ def read_config(config_file):
             dft_parameters['mpi_env'] = str(config['dft']['mpi_env'])
         else:
             dft_parameters['mpi_env'] = 'local'
-    else:
-        general_parameters['csc'] = False
 
     # optional stuff
     if 'jobname' in config['general']:
@@ -318,9 +315,8 @@ def read_config(config_file):
 
     if 'fixed_mu_value' in config['general']:
         general_parameters['fixed_mu_value'] = float(config['general']['fixed_mu_value'])
-        general_parameters['fixed_mu'] = True
     else:
-        general_parameters['fixed_mu'] = False
+        general_parameters['fixed_mu_value'] = 'none'
     if 'dft_mu' in config['general']:
         general_parameters['dft_mu'] = float(config['general']['dft_mu'])
     else:

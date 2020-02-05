@@ -17,24 +17,12 @@ import pytriqs.utility.mpi as mpi
 from pytriqs.operators.util.U_matrix import U_matrix, U_matrix_kanamori, reduce_4index_to_2index, U_J_to_radial_integrals
 from pytriqs.operators.util.hamiltonians import h_int_kanamori, h_int_slater, h_int_density
 from pytriqs.archive import HDFArchive
-try:
-    # TRIQS 2.0
-    from triqs_cthyb.solver import Solver
-    from triqs_dft_tools.sumk_dft import SumkDFT
-    from pytriqs.gf import GfImTime, GfLegendre, BlockGf, make_hermitian
-    from pytriqs.gf.tools import inverse
-    from pytriqs.gf.descriptors import Fourier, InverseFourier
-    legacy_mode = False
-except ImportError:
-    # TRIQS 1.4
-    from pytriqs.applications.impurity_solvers.cthyb import *
-    from pytriqs.applications.dft.sumk_dft import *
-    from pytriqs.applications.dft.sumk_dft_tools import *
-    from pytriqs.applications.dft.converters.vasp_converter import *
-    from pytriqs.applications.dft.converters.plovasp.vaspio import VaspData
-    import pytriqs.applications.dft.converters.plovasp.converter as plo_converter
-    from pytriqs.gf.local import *
-    legacy_mode = True
+from triqs_cthyb.solver import Solver
+from triqs_dft_tools.sumk_dft import SumkDFT
+from pytriqs.gf import GfImTime, GfLegendre, BlockGf, make_hermitian
+from pytriqs.gf.tools import inverse
+from pytriqs.gf.descriptors import Fourier
+
 
 # own modules
 from observables import calc_dft_kin_en, calc_obs, calc_bandcorr_man, write_obs
@@ -312,16 +300,25 @@ def dmft_cycle(general_parameters, solver_parameters, advanced_parameters, obser
             Umat, Upmat = U_matrix_kanamori(n_orb=n_orb, U_int=general_parameters['U'][icrsh],
                                             J_hund=general_parameters['J'][icrsh])
         elif n_orb == 5:
+            # Kanamori cannot be used with the full d-shell
+            if general_parameters['h_int_type'] == 2:
+                raise ValueError('The Kanamori Hamiltonian cannot be used for the full'
+                                 + 'd shell. It only applies to the eg _or_ t2g subset.')
+
             # This is correct when used with the density-density Hamiltonian
             Umat_full = U_matrix(l=2, U_int=general_parameters['U'][icrsh],
                                  J_hund=general_parameters['J'][icrsh], basis='cubic')
             # reduce full 4-index interaction matrix to 2-index
             Umat, Upmat = reduce_4index_to_2index(Umat_full)
             if mpi.is_master_node():
-                print('NOTE: The input parameters U and J here are orbital-averaged parameters.')
-                print('For the density-density or Slater Hamiltonian (latter not supported yet),')
-                print('this corresponds to the definition of U and J in DFT+U, see')
-                print('https://cms.mpi.univie.ac.at/wiki/index.php/LDAUTYPE.')
+                print('''Note: The input parameters U and J here are orbital-averaged parameters.
+                         Same definition of U and J as in DFT+U, see
+                         https://cms.mpi.univie.ac.at/wiki/index.php/LDAUTYPE.
+
+                         WARNING: Each orbital is treated differently. Make sure that
+                         the order of input orbitals corresponds to the order in U_matrix,
+                         see https://triqs.github.io/triqs/2.1.x/reference/operators/util/U_matrix.html'''
+                         + '#pytriqs.operators.util.U_matrix.spherical_to_cubic')
 
                 slater_integrals = U_J_to_radial_integrals(l=2, U_int=general_parameters['U'][icrsh],
                                                            J_hund=general_parameters['J'][icrsh])
@@ -360,10 +357,7 @@ def dmft_cycle(general_parameters, solver_parameters, advanced_parameters, obser
         ####################################
         # hotfix for new triqs 2.0 gf_struct_solver is still a dict
         # but cthyb 2.0 expects a list of pairs ####
-        if legacy_mode:
-            gf_struct = sum_k.gf_struct_solver[icrsh]
-        else:
-            gf_struct = [[k, v] for k, v in sum_k.gf_struct_solver[icrsh].iteritems()]
+        gf_struct = [[k, v] for k, v in sum_k.gf_struct_solver[icrsh].iteritems()]
         ####################################
         # Construct the Solver instances
         if solver_parameters['measure_G_l']:
@@ -547,7 +541,7 @@ def dmft_cycle(general_parameters, solver_parameters, advanced_parameters, obser
     if not general_parameters['csc']:
         n_iter = general_parameters['n_iter_dmft']
 
-    mpi.report('\n{} DMFT cycles requested. Starting with iteration {}.\n'.format(n_iter, iteration_offset+1))
+    mpi.report('\n {} DMFT cycles requested. Starting with iteration  {}.\n'.format(n_iter, iteration_offset+1))
     # make sure a last time that every node as the same number of iterations
     n_iter = mpi.bcast(n_iter)
 
@@ -680,12 +674,6 @@ def _dmft_steps(iteration_offset, n_iter, sum_k, solvers, G_loc_all, general_par
                         solvers[icrsh].G_l_man << solvers[imp_source].G_l_man
 
             else:
-                # ugly workaround for triqs 1.4
-                if legacy_mode:
-                    solver_parameters['measure_g_l'] = solver_parameters['measure_G_l']
-                    del solver_parameters['measure_G_l']
-                    solver_parameters['measure_g_tau'] = solver_parameters['measure_G_tau']
-                    del solver_parameters['measure_G_tau']
 
                 ####################################################################
                 # Solve the impurity problem for this shell
@@ -694,13 +682,6 @@ def _dmft_steps(iteration_offset, n_iter, sum_k, solvers, G_loc_all, general_par
                 solvers[icrsh].solve(h_int=h_int[icrsh], **solver_parameters)
                 # *************************************
                 ####################################################################
-
-                # revert the changes:
-                if legacy_mode:
-                    solver_parameters['measure_G_l'] = solver_parameters['measure_g_l']
-                    del solver_parameters['measure_g_l']
-                    solver_parameters['measure_G_tau'] = solver_parameters['measure_g_tau']
-                    del solver_parameters['measure_g_tau']
 
                 # use Legendre for next G and Sigma instead of matsubara, less noisy!
                 if solver_parameters['measure_G_l']:
@@ -712,17 +693,11 @@ def _dmft_steps(iteration_offset, n_iter, sum_k, solvers, G_loc_all, general_par
                             g.enforce_discontinuity(np.identity(g.target_shape[0]))
                             solvers[icrsh].G_iw[i].set_from_legendre(g)
                             # update G_tau as well:
-                            solvers[icrsh].G_tau_man[i] << InverseFourier(solvers[icrsh].G_iw[i])
+                            solvers[icrsh].G_tau_man[i] << Fourier(solvers[icrsh].G_iw[i])
                         # Symmetrize
                         solvers[icrsh].G_iw << make_hermitian(solvers[icrsh].G_iw)
                         # set Sigma and G_iw from G_l
                         solvers[icrsh].Sigma_iw << inverse(solvers[icrsh].G0_iw) - inverse(solvers[icrsh].G_iw)
-
-                        if legacy_mode:
-                            # bad ass trick to avoid non asymptotic behavior of Sigma
-                            # if legendre is used  with triqs 1.4
-                            for key, value in solvers[icrsh].Sigma_iw:
-                                solvers[icrsh].Sigma_iw[key].tail[-1] = solvers[icrsh].G_iw[key].tail[-1]
 
                     # broadcast new G, Sigmas to all other nodes
                     solvers[icrsh].Sigma_iw_orig << mpi.bcast(solvers[icrsh].Sigma_iw_orig)
@@ -792,10 +767,10 @@ def _dmft_steps(iteration_offset, n_iter, sum_k, solvers, G_loc_all, general_par
         # doing the dmft loop and set new sigma into sumk
         sum_k.put_Sigma([solvers[icrsh].Sigma_iw for icrsh in range(sum_k.n_inequiv_shells)])
 
-        if general_parameters['fixed_mu']:
+        if general_parameters['fixed_mu_value'] != 'none':
             sum_k.set_mu(general_parameters['fixed_mu_value'])
             previous_mu = sum_k.chemical_potential
-            mpi.report('+++ Keeping the chemical potential fixed at: '+str(general_parameters['fixed_mu_value'])+' +++')
+            mpi.report('+++ Keeping the chemical potential fixed at {} eV +++'.format(general_parameters['fixed_mu_value']))
         else:
             # saving previous mu for writing to observables file
             previous_mu = sum_k.chemical_potential

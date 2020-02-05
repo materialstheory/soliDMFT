@@ -70,8 +70,21 @@ RUN cd && wget -q https://files.pythonhosted.org/packages/74/5d/6f11a5fffc3d8884
 ENV CXX=clang++
 ENV CC=clang
 
+# W90
+RUN cd / && git clone -b v2.1 https://github.com/wannier-developers/wannier90.git wannier90 \
+&& cd /wannier90 \
+# Using gfortran compiler - same as mpif90, mpif90 just links to it anyways
+&& cp ./config/make.inc.gfort ./make.inc \
+# Make gfort use the intel libraries
+&& sed -i 's@^LIBS.*@LIBS = -L${MKLROOT}/lib/intel64 -Wl,--no-as-needed -lmkl_gf_lp64 -lmkl_sequential -lmkl_core -lpthread -lm -ldl@' ./make.inc \
+&& make default lib
+
 # VASP for CSC calculations
 ADD csc_vasp.tar.gz /vasp/
+# Set flags for W90 in the makefile.include
+RUN cd /vasp/ && echo 'LLIBS += /wannier90/libwannier.a' >> makefile.include \
+     && ex -s -c '9i|CPP_OPTIONS += -DVASP2WANNIER90v2' -c x makefile.include
+
 RUN  cd /vasp/ \
      && make std \
      && rm -rf src/ build/ arch/
@@ -79,7 +92,7 @@ RUN  cd /vasp/ \
 ENV PATH=/vasp/bin:${PATH}
 
 # mpi4py
-RUN pip install --no-cache-dir matplotlib mpi4py psutil
+RUN pip install --no-cache-dir matplotlib mpi4py psutil future npm jupyter ipywidgets jupyterlab nodejs pandas shapely descartes ipympl pymatgen==2018.12.12
 
 # triqs
 RUN cd / && mkdir -p triqs && mkdir -p source
@@ -133,10 +146,16 @@ RUN cd / && mkdir work && cd work
 ENV OMP_NUM_THREADS=1
 ENV OMPI_MCA_btl_vader_single_copy_mechanism=none
 
+# expose port for jupyter
+EXPOSE 8378
+
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
+COPY jupyter_start.sh /usr/local/bin/jupyter.sh
+
 
 
 RUN ["chmod", "+x", "/usr/local/bin/entrypoint.sh"]
+RUN ["chmod", "+x", "/usr/local/bin/jupyter.sh"]
 
 # change user and group id to match host machine if options are passed accordingly
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]

@@ -11,20 +11,10 @@ import numpy as np
 
 # triqs
 import pytriqs.utility.mpi as mpi
-try:
-    # TRIQS 2.0
-    from pytriqs.gf import GfImTime
-    from pytriqs.atom_diag import trace_rho_op
-    from pytriqs.gf.descriptors import InverseFourier
-except ImportError:
-    # TRIQS 1.4
-    from pytriqs.applications.impurity_solvers.cthyb import *
-    from pytriqs.applications.dft.sumk_dft import *
-    from pytriqs.applications.dft.sumk_dft_tools import *
-    from pytriqs.applications.dft.converters.vasp_converter import *
-    from pytriqs.applications.dft.converters.plovasp.vaspio import VaspData
-    import pytriqs.applications.dft.converters.plovasp.converter as plo_converter
-    from pytriqs.gf.local import *
+from pytriqs.gf import GfImTime
+from pytriqs.atom_diag import trace_rho_op
+from pytriqs.gf.descriptors import Fourier
+
 
 import toolset
 
@@ -73,15 +63,11 @@ def prep_observables(general_parameters, h5_archive):
         observables['h_loc'] = [[] for _ in range(n_inequiv_shells)]
         observables['h_loc_diag'] = [[] for _ in range(n_inequiv_shells)]
 
-    # prepare observable files
-    if not 'iteration_count' in h5_archive['DMFT_results']:
-        prepare_obs_files(general_parameters, n_inequiv_shells)
-
     return observables
 
-def prepare_obs_files(general_parameters, n_inequiv_shells):
+def prepare_obs_files(general_parameters, n_inequiv_shells, n_orbitals):
     """
-    prepares the observable files for writing
+    Prepares the observable files for writing
 
     Parameters
     ----------
@@ -95,49 +81,33 @@ def prepare_obs_files(general_parameters, n_inequiv_shells):
     nothing
 
     """
-
-    if general_parameters['magnetic']:
-        observables_up = []
-        observables_down = []
-    else:
-        observables = []
+    header_energy_mask = ' | {:>10} | {:>10}   {:>10}   {:>10}   {:>10}'
+    header_energy = header_energy_mask.format('E_tot', 'E_DFT', 'E_bandcorr', 'E_int_imp', 'E_DC')
 
     for icrsh in range(n_inequiv_shells):
+        number_spaces = max(10*n_orbitals[icrsh] + 3*(n_orbitals[icrsh]-1), 21)
+        header_basic_mask = '{{:>3}} | {{:>10}} | {{:>{}}} | {{:>{}}} | {{:>17}}'.format(number_spaces, number_spaces)
+
+        # If magnetic calculation is done create two obs files per imp
         if general_parameters['magnetic']:
-            print('observables for impurity '+str(icrsh)+' are written to file observables_imp'+str(icrsh)+'_up.dat and _down.dat')
+            for spin in ('up', 'down'):
+                header = header_basic_mask.format('it', 'mu', 'G(beta/2) per orbital', 'orbital occs '+spin, 'impurity occ '+spin)
+
+                if general_parameters['calc_energies']:
+                    header += header_energy
+
+                file_name = '{}/observables_imp{}_{}.dat'.format(general_parameters['jobname'], icrsh, spin)
+                with open(file_name, 'w') as obs_file:
+                    obs_file.write(header + '\n')
         else:
-            print('observables for impurity '+str(icrsh)+' are written to file observables_imp'+str(icrsh)+'.dat')
-        # only print header if no previous iterations are found
+            header = header_basic_mask.format('it', 'mu', 'G(beta/2) per orbital', 'orbital occs up+down', 'impurity occ')
 
-        # if magnetic calculation is done create two obs files per imp
-        if general_parameters['magnetic']:
-            observables_up.append(open(general_parameters['jobname']+'/'+'observables_imp'+str(icrsh)+'_up.dat', 'w'))
-            observables_down.append(open(general_parameters['jobname']+'/'+'observables_imp'+str(icrsh)+'_down.dat', 'w'))
-
-            observables_up[icrsh].write(' it    |  mu   |  G(beta/2) per orbital  |  orbital occs up  |  impurity occ up channel')
-            observables_down[icrsh].write(' it    |  mu   |  G(beta/2) per orbital  |  orbital occs down  |  impurity occ down channel')
             if general_parameters['calc_energies']:
-                observables_up[icrsh].write(' | E_tot E_DFT E_bandcorr E_int_imp E_DC \n')
-                observables_down[icrsh].write(' | E_tot E_DFT E_bandcorr E_int_imp E_DC \n')
-            else:
-                observables_up[icrsh].write('\n')
-                observables_down[icrsh].write('\n')
+                header += header_energy
 
-            observables_up[icrsh].close()
-            observables_down[icrsh].close()
-
-        else:
-            observables.append(open(general_parameters['jobname']+'/'+'observables_imp'+str(icrsh)+'.dat', 'w'))
-
-            observables[icrsh].write(' it    |  mu   |  G(beta/2) per orbital  |  orbital occs up+down  |  impurity occ')
-            if general_parameters['calc_energies']:
-                observables[icrsh].write(' | E_tot E_DFT E_bandcorr E_int_imp E_DC \n')
-            else:
-                observables[icrsh].write('\n')
-
-            observables[icrsh].close()
-
-    return
+            file_name = '{}/observables_imp{}.dat'.format(general_parameters['jobname'], icrsh)
+            with open(file_name, 'w') as obs_file:
+                obs_file.write(header + '\n')
 
 def calc_obs(observables, general_parameters, solver_parameters, it, solvers, h_int, dft_mu, previous_mu, sum_k, G_loc_all_dft, density_mat_dft, density_mat, shell_multiplicity, E_bandcorr):
     """
@@ -183,6 +153,7 @@ def calc_obs(observables, general_parameters, solver_parameters, it, solvers, h_
     E_dft = 0.0
     E_int = np.zeros(sum_k.n_inequiv_shells)
     E_corr_en = 0.0
+    E_DC = 0.0
 
     if general_parameters['csc']:
         # Read energy from OSZICAR
@@ -195,7 +166,6 @@ def calc_obs(observables, general_parameters, solver_parameters, it, solvers, h_
         observables['E_bandcorr'].append(0.0)
         observables['E_corr_en'].append(0.0)
         observables['E_dft'].append(E_dft)
-        observables['E_tot'].append(E_dft)
 
         for icrsh in range(sum_k.n_inequiv_shells):
             # determine number of orbitals per shell
@@ -214,13 +184,19 @@ def calc_obs(observables, general_parameters, solver_parameters, it, solvers, h_
             occ_orb_up = []
             occ_orb_down = []
 
+            for icrsh in range(sum_k.n_inequiv_shells):
+                E_DC += shell_multiplicity[icrsh]*sum_k.dc_energ[sum_k.inequiv_to_corr[icrsh]]
+
+            # for it 0 we just subtract E_DC from E_DFT
+            observables['E_tot'].append(E_dft - E_DC)
+
             # iterate over all spin channels and add the to up or down
-            for spin_channel, _ in sum_k.gf_struct_solver[icrsh].iteritems():
+            for spin_channel in sum_k.gf_struct_solver[icrsh]:
 
                 # G(beta/2)
                 G_tau = GfImTime(indices=solvers[icrsh].G_tau_man[spin_channel].indices,
                                  beta=general_parameters['beta'])
-                G_tau << InverseFourier(G_loc_all_dft[icrsh][spin_channel])
+                G_tau << Fourier(G_loc_all_dft[icrsh][spin_channel])
 
                 mesh_mid = int(len(G_tau.data)/2)
                 # since G(tau) has always 10001 values we are sampling +-10 values
@@ -299,7 +275,7 @@ def calc_obs(observables, general_parameters, solver_parameters, it, solvers, h_
                             "! WARNING: calculating interaction energy using Migdal formula                              !\n"
                             "! consider turning on measure density matrix to use the more stable trace_rho_op function   !\n"
                             "!-------------------------------------------------------------------------------------------!" )
-                print warning
+                print(warning)
 
                 E_int[icrsh] = 0.5 * (solvers[icrsh].G_iw* solvers[icrsh].Sigma_iw).total_density()
 
@@ -395,100 +371,79 @@ def write_obs(observables, sum_k, general_parameters):
 
     """
 
-    if general_parameters['magnetic']:
-        obs_files = {'up': [], 'down': []}
-    else:
-        obs_files = []
+    n_inequiv_shells = sum_k.n_inequiv_shells
+    n_orbitals = [len(observables['orb_gb2'][icrsh]['up'][0]) for icrsh in range(n_inequiv_shells)]
 
-    # open obs files
-    nfiles = sum_k.n_inequiv_shells
-    for ifile in range(nfiles):
+    # Prints header in first iteration, using len() to not remove DFT obs writing
+    if len(observables['iteration']) == 1:
+        prepare_obs_files(general_parameters, n_inequiv_shells, n_orbitals)
+
+    for icrsh in range(n_inequiv_shells):
         if general_parameters['magnetic']:
-            obs_files['up'].append(open(general_parameters['jobname']+'/'+
-                                        'observables_imp'+str(ifile)+'_up.dat', 'a'))
-            obs_files['down'].append(open(general_parameters['jobname']+'/'+
-                                          'observables_imp'+str(ifile)+'_down.dat', 'a'))
-        else:
-            obs_files.append(open(general_parameters['jobname']+'/'+
-                                  'observables_imp'+str(ifile)+'.dat', 'a'))
+            for spin in ('up', 'down'):
+                line = '{:3d} | '.format(observables['iteration'][-1])
+                line += '{:10.5f} | '.format(observables['mu'][-1])
 
-    for icrsh in range(sum_k.n_inequiv_shells):
+                if n_orbitals[icrsh] == 1:
+                    line += ' '*11
+                for item in observables['orb_gb2'][icrsh][spin][-1]:
+                    line += '{:10.5f}   '.format(item)
+                line = line[:-3] + ' | '
 
-        if general_parameters['magnetic']:
-            for spin in ['up', 'down']:
-                obs_files[spin][icrsh].write('{:3d}'.format(observables['iteration'][-1]))
-                obs_files[spin][icrsh].write('  ')
-                obs_files[spin][icrsh].write('{:10.5f}'.format(observables['mu'][-1]))
-                obs_files[spin][icrsh].write('  ')
+                if n_orbitals[icrsh] == 1:
+                    line += ' '*11
+                for item in observables['orb_occ'][icrsh][spin][-1]:
+                    line += '{:10.5f}   '.format(item)
+                line = line[:-3] + ' | '
 
-                for i, item in enumerate(observables['orb_gb2'][icrsh][spin][-1]):
-                    obs_files[spin][icrsh].write('{:10.5f}'.format(item))
-                    obs_files[spin][icrsh].write('  ')
-
-                for i, item in enumerate(observables['orb_occ'][icrsh][spin][-1]):
-                    obs_files[spin][icrsh].write('{:10.5f}'.format(item))
-                    obs_files[spin][icrsh].write('  ')
-
-                obs_files[spin][icrsh].write('{:10.5f}'.format(observables['imp_occ'][icrsh][spin][-1]))
+                line += '{:17.5f}'.format(observables['imp_occ'][icrsh][spin][-1])
 
                 if general_parameters['calc_energies']:
-                    obs_files[spin][icrsh].write('  ')
-                    obs_files[spin][icrsh].write('{:10.5f}'.format(observables['E_tot'][-1]))
-                    obs_files[spin][icrsh].write('  ')
-                    obs_files[spin][icrsh].write('{:10.5f}'.format(observables['E_dft'][-1]))
-                    obs_files[spin][icrsh].write('  ')
-                    obs_files[spin][icrsh].write('{:10.5f}'.format(observables['E_bandcorr'][-1]))
-                    obs_files[spin][icrsh].write('  ')
-                    obs_files[spin][icrsh].write('{:10.5f}'.format(observables['E_int'][icrsh][-1]))
-                    obs_files[spin][icrsh].write('  ')
-                    obs_files[spin][icrsh].write('{:10.5f}'.format(observables['E_DC'][icrsh][-1]))
+                    line += ' | {:10.5f}'.format(observables['E_tot'][-1])
+                    line += ' | {:10.5f}'.format(observables['E_dft'][-1])
+                    line += '   {:10.5f}'.format(observables['E_bandcorr'][-1])
+                    line += '   {:10.5f}'.format(observables['E_int'][icrsh][-1])
+                    line += '   {:10.5f}'.format(observables['E_DC'][icrsh][-1])
 
-                obs_files[spin][icrsh].write('\n')
+                file_name = '{}/observables_imp{}_{}.dat'.format(general_parameters['jobname'], icrsh, spin)
+                with open(file_name, 'a') as obs_file:
+                    obs_file.write(line + '\n')
         else:
-            # adding up the spin channels
-            obs_files[icrsh].write('{:3d}'.format(observables['iteration'][-1]))
-            obs_files[icrsh].write('  ')
-            obs_files[icrsh].write('{:10.5f}'.format(observables['mu'][-1]))
-            obs_files[icrsh].write('  ')
+            line = '{:3d} | '.format(observables['iteration'][-1])
+            line += '{:10.5f} | '.format(observables['mu'][-1])
 
-            for i, item in enumerate(observables['orb_gb2'][icrsh]['up'][-1]):
-                val = (observables['orb_gb2'][icrsh]['up'][-1][i]+
-                       observables['orb_gb2'][icrsh]['down'][-1][i])
-                obs_files[icrsh].write('{:10.5f}'.format(val))
-                obs_files[icrsh].write('  ')
+            # Adds spaces for header to fit in properly
+            if n_orbitals[icrsh] == 1:
+                line += ' '*11
+            # Adds up the spin channels
+            for val_up, val_down in zip(observables['orb_gb2'][icrsh]['up'][-1],
+                                        observables['orb_gb2'][icrsh]['down'][-1]):
+                line += '{:10.5f}   '.format(val_up + val_down)
+            line = line[:-3] + ' | '
 
-            for i, item in enumerate(observables['orb_occ'][icrsh]['up'][-1]):
-                val = (observables['orb_occ'][icrsh]['up'][-1][i]+
-                       observables['orb_occ'][icrsh]['down'][-1][i])
-                obs_files[icrsh].write('{:10.5f}'.format(val))
-                obs_files[icrsh].write('  ')
+            # Adds spaces for header to fit in properly
+            if n_orbitals[icrsh] == 1:
+                line += ' '*11
+            # Adds up the spin channels
+            for val_up, val_down in zip(observables['orb_occ'][icrsh]['up'][-1],
+                                        observables['orb_occ'][icrsh]['down'][-1]):
+                line += '{:10.5f}   '.format(val_up + val_down)
+            line = line[:-3] + ' | '
 
+            # Adds up the spin channels
             val = observables['imp_occ'][icrsh]['up'][-1]+observables['imp_occ'][icrsh]['down'][-1]
-            obs_files[icrsh].write('{:10.5f}'.format(val))
+            line += '{:17.5f}'.format(val)
 
             if general_parameters['calc_energies']:
-                obs_files[icrsh].write('  ')
-                obs_files[icrsh].write('{:10.5f}'.format(observables['E_tot'][-1]))
-                obs_files[icrsh].write('  ')
-                obs_files[icrsh].write('{:10.5f}'.format(observables['E_dft'][-1]))
-                obs_files[icrsh].write('  ')
-                obs_files[icrsh].write('{:10.5f}'.format(observables['E_bandcorr'][-1]))
-                obs_files[icrsh].write('  ')
-                obs_files[icrsh].write('{:10.5f}'.format(observables['E_int'][icrsh][-1]))
-                obs_files[icrsh].write('  ')
-                obs_files[icrsh].write('{:10.5f}'.format(observables['E_DC'][icrsh][-1]))
+                line += ' | {:10.5f}'.format(observables['E_tot'][-1])
+                line += ' | {:10.5f}'.format(observables['E_dft'][-1])
+                line += '   {:10.5f}'.format(observables['E_bandcorr'][-1])
+                line += '   {:10.5f}'.format(observables['E_int'][icrsh][-1])
+                line += '   {:10.5f}'.format(observables['E_DC'][icrsh][-1])
 
-            obs_files[icrsh].write('\n')
-
-    # closing the files
-    for ifile in range(nfiles):
-        if general_parameters['magnetic']:
-            for spin in ['up', 'down']:
-                obs_files[spin][ifile].close()
-        else:
-            obs_files[ifile].close()
-
-    return
+            file_name = '{}/observables_imp{}.dat'.format(general_parameters['jobname'], icrsh)
+            with open(file_name, 'a') as obs_file:
+                obs_file.write(line + '\n')
 
 def calc_dft_kin_en(general_parameters, sum_k, dft_mu):
     """

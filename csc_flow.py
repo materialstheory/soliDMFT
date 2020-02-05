@@ -2,98 +2,20 @@
 
 import time
 from timeit import default_timer as timer
-import os.path
-import socket
-from collections import defaultdict
+import os
 
 # triqs
 import pytriqs.utility.mpi as mpi
 from pytriqs.archive import HDFArchive
-try:
-    # TRIQS 2.0
-    from triqs_dft_tools.converters.vasp_converter import VaspConverter
-    import triqs_dft_tools.converters.plovasp.converter as plo_converter
-except ImportError:
-    # TRIQS 1.4
-    from pytriqs.applications.dft.sumk_dft import *
-    from pytriqs.applications.dft.sumk_dft_tools import *
-    from pytriqs.applications.dft.converters.vasp_converter import *
-    import pytriqs.applications.dft.converters.plovasp.converter as plo_converter
-    pass
+from triqs_dft_tools.converters.vasp_converter import VaspConverter
+import triqs_dft_tools.converters.plovasp.converter as plo_converter
+
 
 #from observables import *
 from observables import prep_observables
 import toolset
 from dmft_cycle import dmft_cycle
-
-# Functions for interaction with VASP
-
-def start_vasp_from_master_node(number_cores, vasp_command, mpi_env):
-
-    # get MPI env
-    world = mpi.world
-    vasp_pid = 0
-
-    hostnames = world.gather(socket.gethostname(), root=0)
-    if mpi.is_master_node():
-        # create hostfile based on first number_cores ranks
-        hostfile = 'vasp.hostfile'
-        hosts = defaultdict(int)
-        for h in hostnames[:number_cores]:
-            hosts[h] += 1
-        with open(hostfile, 'w') as f:
-            for i in hosts.items():
-                f.write("%s slots=%d \n"%i)
-
-        # clean environment
-        env = {}
-        for e in ['PATH','LD_LIBRARY_PATH','SHELL','PWD','HOME',
-                'OMP_NUM_THREADS','OMPI_MCA_btl_vader_single_copy_mechanism']:
-            v = os.getenv(e)
-            if v: env[e] = v
-
-        # assuming that mpirun points to the correct mpi env
-        exe = 'mpirun'
-        for d in os.getenv('PATH', os.defpath).split(os.pathsep):
-            if d:
-                p = os.path.join(d, exe)
-                if os.access(p, os.F_OK | os.X_OK):
-                    exe = p
-                    break
-
-        # arguments for mpirun: for the scond node, mpirun starts VASP by using ssh, therefore we need to handover the env variables with -x
-        mpi_environments = {
-            'local' : [exe, '-np', str(number_cores), vasp_command],
-            'rusty' : [exe, '-hostfile', hostfile, '-np', str(number_cores),
-                       '-mca', 'mtl', '^psm2,ofi', '-x', 'LD_LIBRARY_PATH',
-                       '-x', 'PATH', '-x', 'OMP_NUM_THREADS', vasp_command]
-        }
-
-        args = mpi_environments[mpi_env]
-
-        vasp_pid = os.fork()
-        if vasp_pid == 0:
-            # close_fds
-            for fd in range(3,256):
-                try:
-                    os.close(fd)
-                except OSError:
-                    pass
-            print("\n Starting VASP now \n")
-            os.execve(exe, args, env)
-            print('\n VASP exec failed \n')
-            os._exit(127)
-
-    mpi.barrier()
-    vasp_pid = mpi.bcast(vasp_pid)
-
-    return vasp_pid
-
-def activate_vasp():
-    if mpi.is_master_node():
-        open('./vasp.lock', 'a').close()
-    mpi.barrier()
-    return
+import vasp_manager as vasp
 
 
 # Main CSC flow method
@@ -119,12 +41,11 @@ def csc_flow_control(general_parameters, solver_parameters, dft_parameters, adva
 
     """
 
-    vasp_process = start_vasp_from_master_node(dft_parameters['n_cores'],
-                                            dft_parameters['executable'],
-                                            dft_parameters['mpi_env'])
+    vasp_process_id = vasp.start(dft_parameters['n_cores'], dft_parameters['executable'],
+                                 dft_parameters['mpi_env'])
 
     mpi.report('  Waiting for VASP lock to appear...')
-    while not toolset.is_vasp_lock_present():
+    while not vasp.is_lock_file_present():
         time.sleep(1)
 
     # if GAMMA file already exists, load it by doing an extra DFT iteration
@@ -139,13 +60,13 @@ def csc_flow_control(general_parameters, solver_parameters, dft_parameters, adva
         mpi.report('  Waiting for VASP lock to disappear...')
         mpi.barrier()
         #waiting for vasp to finish
-        while toolset.is_vasp_lock_present():
+        while vasp.is_lock_file_present():
             time.sleep(1)
 
         # check if we should do a dmft iteration now
         iter += 1
         if (iter-1) % dft_parameters['n_iter'] != 0 or iter < 0:
-            activate_vasp()
+            vasp.reactivate()
             continue
 
         # run the converter
@@ -220,8 +141,8 @@ def csc_flow_control(general_parameters, solver_parameters, dft_parameters, adva
             print('='*80 + '\n')
         #######
 
-        # remove the lock file and Vasp will be unleashed
-        activate_vasp()
+        # creates the lock file and Vasp will be unleashed
+        vasp.reactivate()
 
         # start the timer again for the dft loop
         if mpi.is_master_node():
@@ -231,8 +152,4 @@ def csc_flow_control(general_parameters, solver_parameters, dft_parameters, adva
     if mpi.is_master_node():
         print('\n  Maximum number of iterations reached.')
         print('  Aborting VASP iterations...\n')
-        f_stop = open('STOPCAR', 'wt')
-        f_stop.write('LABORT = .TRUE.\n')
-        f_stop.close()
-        os.kill(vasp_process, signal.SIGTERM)
-        mpi.MPI.COMM_WORLD.Abort(1)
+        vasp.kill(vasp_process_id)
