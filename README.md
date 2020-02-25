@@ -1,4 +1,4 @@
-# uni-DMFT a universal DMFT code
+# soliDMFT 
 This program allows to perform DFT+DMFT ''one-shot'' and CSC
 calculations from h5 archives or VASP input files for multiband systems using
 the TRIQS package, in combination with the CThyb solver and SumkDFT from
