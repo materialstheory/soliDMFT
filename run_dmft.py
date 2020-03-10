@@ -138,6 +138,7 @@ def main():
                     h5_archive['DMFT_results'].create_group('last_iter')
                 if not 'DMFT_input' in h5_archive:
                     h5_archive.create_group('DMFT_input')
+                    h5_archive['DMFT_input'].create_group('solver')
 
             # prepare observable dicts and files, which is stored on the master node
             observables = dict()

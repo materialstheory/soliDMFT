@@ -92,7 +92,7 @@ RUN  cd /vasp/ \
 ENV PATH=/vasp/bin:${PATH}
 
 # mpi4py
-RUN pip install --no-cache-dir matplotlib mpi4py psutil future npm jupyter ipywidgets jupyterlab nodejs pandas shapely descartes ipympl pymatgen==2018.12.12
+RUN pip install --no-cache-dir matplotlib mpi4py psutil future npm jupyter ipywidgets jupyterlab nodejs pandas shapely clang  nbsphinx sphinx-autobuild descartes ipympl monty==1.0.6 pymatgen==2018.12.12 
 
 # triqs
 RUN cd / && mkdir -p triqs && mkdir -p source

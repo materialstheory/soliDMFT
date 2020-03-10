@@ -1,5 +1,7 @@
 FROM materialstheory/base-bionic-sci-python
 
+RUN rm /usr/lib/x86_64-linux-gnu/libgfortran.so.3* && rm /etc/ld.so.cache && ldconfig
+
 # set some compiler flags
 ENV CFLAGS="-m64 -O3 -Wl,--no-as-needed"
 ENV CXXFLAGS="-m64 -O3 -Wl,--no-as-needed"

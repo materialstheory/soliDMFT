@@ -200,6 +200,27 @@ In general I found 1 node for Vasp is in most cases enough, which means that we 
 Using more than one node results in a lot of MPI communication, which in turn slows down the calculation significantly.
 For a 80 atom unit cell 2 nodes are useful, but for a 20 atom unit cell not at all!
 
+## LOCPROJ bug for individual projections:
+
+In the current version there is some mix up in the mapping between selected orbitals in the INCAR and actual selected in the LOCPROJ. This is 
+what the software does (left side is INCAR, right side is resulting in the LOCPROJ)
+
+* xy -> x2-y2
+* yz -> z2
+* xz -> yz
+* x2-y2 -> xz
+* z2 -> xy
+
+```
+LOCPROJ = 2 : dxz : Pr 1
+LOCPROJ = 2 : dx2-y2 : Pr 1
+LOCPROJ = 2 : dz2 : Pr 1
+```
+However, if the complete d manifold is chosen, the usual VASP order (xy, yz, z2, xz, x2-y2) is obtained in the LOCPROJ. This is done as shown below
+```
+LOCPROJ = 2 : d : Pr 1
+```
+
 ## remarks on the Vasp version
 
 One can use the official Vasp 5.4.4 patch 1 version with a few modifications:

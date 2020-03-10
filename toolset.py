@@ -15,7 +15,9 @@ import numpy as np
 import pytriqs.utility.mpi as mpi
 from pytriqs.archive import HDFArchive
 from triqs_dft_tools.converters.plovasp.vaspio import VaspData
-
+from pytriqs.gf import BlockGf
+from pytriqs.gf.tools import fit_legendre
+from pytriqs.gf.gf_fnt import enforce_discontinuity
 
 
 def store_dft_eigvals(config_file, path_to_h5, iteration):
@@ -169,69 +171,37 @@ def determine_block_structure(sum_k, general_parameters):
 
     sum_k.analyse_block_structure(dm=dens_mat, threshold=general_parameters['block_threshold'])
 
-    # Summary of block structure finder and determination of shell_multiplicity
-    shell_multiplicity = [0 for icrsh in range(sum_k.n_inequiv_shells)]
+    # Determination of shell_multiplicity
     if mpi.is_master_node():
-        print('\n number of ineq. correlated shells: {}'.format(sum_k.n_inequiv_shells))
-        # correlated shells and their structure
-        print('\n block structure summary')
-        for icrsh in range(sum_k.n_inequiv_shells):
-            shlst = []
-            for ish in range(sum_k.n_corr_shells):
-                if sum_k.corr_to_inequiv[ish] == icrsh:
-                    shlst.append(ish)
-            shell_multiplicity[icrsh] = len(shlst)
-            print(' -- Shell type #{:3d}: '.format(icrsh) + format(shlst))
-            print('  | shell multiplicity '+str(shell_multiplicity[icrsh]))
-            print('  | block struct. : ' + format(sum_k.gf_struct_solver[icrsh]))
-            print('  | deg. orbitals : ' + format(sum_k.deg_shells[icrsh]))
-
-        print('\n rotation matrices ')
-        # rotation matrices
-        for icrsh in range(sum_k.n_corr_shells):
-            n_orb = sum_k.corr_shells[icrsh]['dim']
-            print('rot_mat[{:2d}] '.format(icrsh)+'real part'.center(9*n_orb)+'  '+'imaginary part'.center(9*n_orb))
-            rot = np.matrix(sum_k.rot_mat[icrsh])
-            for irow in range(n_orb):
-                fmt = '{:9.5f}' * n_orb
-                row = np.real(rot[irow, :]).tolist()[0] + np.imag(rot[irow, :]).tolist()[0]
-                print((' '*11 + fmt + '  ' + fmt).format(*row))
-
-        print('\n')
-
+        shell_multiplicity = [sum_k.corr_to_inequiv.count(icrsh) for icrsh in range(sum_k.n_inequiv_shells)]
+    else:
+        shell_multiplicity = None
     shell_multiplicity = mpi.bcast(shell_multiplicity)
 
     return sum_k, shell_multiplicity
 
-def print_block_sym(sum_k, shell_multiplicity):
+def print_block_sym(sum_k):
     # Summary of block structure finder and determination of shell_multiplicity
-    shell_multiplicity = [0 for icrsh in range(sum_k.n_inequiv_shells)]
     if mpi.is_master_node():
         print('\n number of ineq. correlated shells: {}'.format(sum_k.n_inequiv_shells))
         # correlated shells and their structure
         print('\n block structure summary')
         for icrsh in range(sum_k.n_inequiv_shells):
-            shlst = []
-            for ish in range(sum_k.n_corr_shells):
-                if sum_k.corr_to_inequiv[ish] == icrsh:
-                    shlst.append(ish)
-            shell_multiplicity[icrsh] = len(shlst)
+            shlst = [ish for ish, ineq_shell in enumerate(sum_k.corr_to_inequiv) if ineq_shell == icrsh]
             print(' -- Shell type #{:3d}: '.format(icrsh) + format(shlst))
-            print('  | shell multiplicity '+str(shell_multiplicity[icrsh]))
+            print('  | shell multiplicity '+str(len(shlst)))
             print('  | block struct. : ' + format(sum_k.gf_struct_solver[icrsh]))
             print('  | deg. orbitals : ' + format(sum_k.deg_shells[icrsh]))
 
-        print('\n rotation matrices ')
-        # rotation matrices
-        for icrsh in range(sum_k.n_corr_shells):
+        # Prints matrices
+        print('\nRotation matrices')
+        for icrsh, rot_crsh in enumerate(sum_k.rot_mat):
             n_orb = sum_k.corr_shells[icrsh]['dim']
             print('rot_mat[{:2d}] '.format(icrsh)+'real part'.center(9*n_orb)+'  '+'imaginary part'.center(9*n_orb))
-            rot = np.matrix(sum_k.rot_mat[icrsh])
-            for irow in range(n_orb):
-                fmt = '{:9.5f}' * n_orb
-                row = np.real(rot[irow, :]).tolist()[0] + np.imag(rot[irow, :]).tolist()[0]
+            fmt = '{:9.5f}' * n_orb
+            for row in rot_crsh:
+                row = np.concatenate((row.real, row.imag))
                 print((' '*11 + fmt + '  ' + fmt).format(*row))
-
         print('\n')
 
 def load_sigma_from_h5(path_to_h5, iteration):
@@ -277,3 +247,73 @@ def load_sigma_from_h5(path_to_h5, iteration):
     del old_calc
 
     return self_energies, dc_imp, dc_energ
+
+def legendre_filter(G_tau, order=100, G_l_cut=1e-19):
+    """ Filter binned imaginary time Green's function
+    using a Legendre filter of given order and coefficient threshold.
+
+    Parameters
+    ----------
+    G_tau : TRIQS imaginary time Block Green's function
+    auto : determines automatically the cut-off nl
+    order : int
+        Legendre expansion order in the filter
+    G_l_cut : float
+        Legendre coefficient cut-off
+    Returns
+    -------
+    G_l : TRIQS Legendre Block Green's function
+        Fitted Green's function on a Legendre mesh
+    """
+
+    # determine number of coefficients if auto=True
+    # if auto:
+        # print('determining number of legendre coefficients from decay! Check carefully!')
+        # l_g_l_check = []
+
+        # for b, g in G_tau:
+
+            # # choose large order to find noise lvl
+            # g_l = fit_legendre(g, order=100)
+            # enforce_discontinuity(g_l, np.array([[1.]]))
+            # l_g_l_check.append(g_l)
+
+        # G_l_check = BlockGf(name_list=list(G_tau.indices), block_list=l_g_l_check)
+
+        # nl_cut = []
+        # # for each block
+        # for blck, G_l_block in G_l_check:
+            # n_orb = G_l_block.target_shape[0]
+            # nl_even = len(G_l_block[0,0].data[0::2])
+            # # loop over orbitals
+            # for i_orb in range(0,n_orb):
+
+                # # only take even Gls [0::2]
+                # G_l_orb = np.abs(G_l_block[i_orb,i_orb].data[0::2])
+
+                # # very simple determination, determine when
+                # # decay stops from coefficents 8 on
+                # for i_l in range(4,nl_even,1):
+                    # if (G_l_orb[i_l] > G_l_orb[i_l-1]):
+                        # nl_cut.append(2*i_l)
+                        # break
+
+        # order = int(np.average(nl_cut)+4)
+
+        # print('orbitally averaged determined number of legendre coefficients: '+str(order))
+
+    # final run with automatically determined number of coefficients or given order
+    l_g_l = []
+
+    for b, g in G_tau:
+
+        g_l = fit_legendre(g, order=order)
+        g_l.data[:] *= (np.abs(g_l.data) > G_l_cut)
+        g_l.enforce_discontinuity(np.identity(g.target_shape[0]))
+
+        l_g_l.append(g_l)
+
+    G_l = BlockGf(name_list=list(G_tau.indices), block_list=l_g_l)
+
+    return G_l
+

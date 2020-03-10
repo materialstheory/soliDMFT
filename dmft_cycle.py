@@ -10,12 +10,12 @@ warnings.simplefilter(action='ignore', category=FutureWarning)
 # system
 import numpy as np
 import os
-import sys
 
 # triqs
 import pytriqs.utility.mpi as mpi
-from pytriqs.operators.util.U_matrix import U_matrix, U_matrix_kanamori, reduce_4index_to_2index, U_J_to_radial_integrals
-from pytriqs.operators.util.hamiltonians import h_int_kanamori, h_int_slater, h_int_density
+from pytriqs.operators.util.U_matrix import (U_matrix, U_matrix_kanamori, reduce_4index_to_2index,
+                                             U_J_to_radial_integrals, transform_U_matrix)
+from pytriqs.operators.util.hamiltonians import h_int_kanamori, h_int_density, h_int_slater
 from pytriqs.archive import HDFArchive
 from triqs_cthyb.solver import Solver
 from triqs_dft_tools.sumk_dft import SumkDFT
@@ -91,24 +91,166 @@ def _calculate_double_counting(sum_k, density_matrix, general_parameters, advanc
     return sum_k
 
 def _extract_U_J_list(param_name, n_inequiv_shells, general_parameters):
-        """
-        Checks if param_name ('U' or 'J') are a single value or different per
-        inequivalent shell. If just a single value is given, this value is
-        applied to each shell.
-        """
+    """
+    Checks if param_name ('U' or 'J') are a single value or different per
+    inequivalent shell. If just a single value is given, this value is
+    applied to each shell.
+    """
 
-        if len(general_parameters[param_name]) == 1:
-            mpi.report('Assuming {} = '.format(param_name)
-                       + '{:.2f} for all correlated shells'.format(general_parameters[param_name][0]))
-            general_parameters[param_name] *= n_inequiv_shells
-        elif len(general_parameters[param_name]) == n_inequiv_shells:
-            mpi.report('{} list for correlated shells: '.format(param_name)
-                       + str(general_parameters[param_name]))
+    if len(general_parameters[param_name]) == 1:
+        mpi.report('Assuming {} = '.format(param_name)
+                   + '{:.2f} for all correlated shells'.format(general_parameters[param_name][0]))
+        general_parameters[param_name] *= n_inequiv_shells
+    elif len(general_parameters[param_name]) == n_inequiv_shells:
+        mpi.report('{} list for correlated shells: '.format(param_name)
+                   + str(general_parameters[param_name]))
+    else:
+        raise IndexError('Property list {} '.format(general_parameters[param_name])
+                         + 'must have length 1 or n_inequiv_shells')
+
+    return general_parameters
+
+
+def _calculate_rotation_matrix(general_parameters, sum_k, iteration_offset, density_mat_dft):
+    """
+    Applies rotation matrix to make the DMFT calculations easier for the solver.
+    Possible are rotations diagonalizing either the local Hamiltonian or the
+    density. Diagonalizing the density has not proven really helpful but
+    diagonalizing the local Hamiltonian has.
+    In the current implementation, this cannot be used when there is a
+    non-identity rot_mat already as for example done by the Wannier90 converter.
+    Note that the interaction Hamiltonian has to be rotated if it is not fully
+    orbital-gauge invariant (only the Kanamori fulfills that).
+    """
+
+    # Extracts new rotation matrices from density_mat or local Hamiltonian
+    if general_parameters['set_rot'] == 'hloc':
+        q_diag = sum_k.eff_atomic_levels()
+        chnl = 'up'
+    elif general_parameters['set_rot'] == 'den':
+        q_diag = density_mat_dft
+        chnl = 'up_0'
+    else:
+        raise ValueError('Parameter set_rot set to wrong value.')
+
+    rot_mat = []
+    for icrsh in range(sum_k.n_corr_shells):
+        ish = sum_k.corr_to_inequiv[icrsh]
+        eigvec = np.linalg.eigh(np.real(q_diag[ish][chnl]))[1]
+        rot_mat.append(np.array(eigvec, dtype=complex))
+
+    sum_k.rot_mat = rot_mat
+    mpi.report('Updating rotation matrices using dft {} eigenbasis to maximise sign'.format(general_parameters['set_rot']))
+
+    # Prints matrices
+    if mpi.is_master_node():
+        print('\nNew rotation matrices')
+        for icrsh, rot_crsh in enumerate(sum_k.rot_mat):
+            n_orb = sum_k.corr_shells[icrsh]['dim']
+            print('rot_mat[{:2d}] '.format(icrsh)+'real part'.center(9*n_orb)+'  '+'imaginary part'.center(9*n_orb))
+            fmt = '{:9.5f}' * n_orb
+            for row in rot_crsh:
+                row = np.concatenate((row.real, row.imag))
+                print((' '*11 + fmt + '  ' + fmt).format(*row))
+        print('\n')
+
+    return sum_k
+
+
+def _construct_interaction_hamiltonian(sum_k, general_parameters):
+    """
+    Constructs the interaction Hamiltonian. Currently implemented are the
+    Kanamori Hamiltonian (for 2 or 3 orbitals) and the density-density Hamiltonian
+    (for 5 orbitals).
+    If sum_k.rot_mat is non-identity, we have to consider rotating the interaction
+    Hamiltonian: the Kanamori Hamiltonian does not change because it is invariant
+    under orbital mixing but all the other Hamiltonians are at most invariant
+    under rotations in space.
+    """
+    h_int = [None] * sum_k.n_inequiv_shells
+
+    for icrsh in range(sum_k.n_inequiv_shells):
+        # ish points to the shell representative of the current group
+        ish = sum_k.inequiv_to_corr[icrsh]
+        n_orb = sum_k.corr_shells[ish]['dim']
+        orb_names = list(range(n_orb))
+
+        # Checks for unphysical/unimplemented combinations of orbitals and Hamiltonians
+        if n_orb in (2, 3) and general_parameters['h_int_type'] != 2:
+            raise NotImplementedError('Only the Kanamori Hamiltonian is '
+                                      + 'implemented for the eg or t2g subset.')
+        elif n_orb == 5 and general_parameters['h_int_type'] == 2:
+            raise ValueError('The Kanamori Hamiltonian cannot be used for the full'
+                             + 'd shell. It only applies to the eg or t2g subset.')
+
+        # Constructs U matrix
+        if n_orb in (2, 3): # e_g or t_2g cases
+            Umat, Upmat = U_matrix_kanamori(n_orb=n_orb, U_int=general_parameters['U'][icrsh],
+                                            J_hund=general_parameters['J'][icrsh])
+        elif n_orb == 5:
+            # construct full spherical symmetric U matrix and transform to cubic basis
+            # the order for the cubic orbitals is as follows ("xy","yz","z^2","xz","x^2-y^2")
+            # this is consistent with the order of orbitals in the VASP interface
+            # but not necessarily with wannier90!
+            Umat_full = U_matrix(l=2, U_int=general_parameters['U'][icrsh],
+                                 J_hund=general_parameters['J'][icrsh], basis='cubic')
+
+            if mpi.is_master_node():
+                print('\nNote: The input parameters U and J here are orbital-averaged parameters.\n'
+                      + 'Same definition of U and J as in DFT+U, see\n'
+                      + 'https://cms.mpi.univie.ac.at/wiki/index.php/LDAUTYPE.\n'
+                      + 'WARNING: Each orbital is treated differently. Make sure that the\n'
+                      + 'order of input orbitals corresponds to the order in U_matrix, see\n'
+                      + 'https://triqs.github.io/triqs/2.1.x/reference/operators/util/U_matrix.html'
+                      + '#pytriqs.operators.util.U_matrix.spherical_to_cubic\n')
+
+                slater_integrals = U_J_to_radial_integrals(l=2, U_int=general_parameters['U'][icrsh],
+                                                           J_hund=general_parameters['J'][icrsh])
+                print('The corresponding slater integrals are')
+                print('[F0, F2, F4] = [{:.2f}, {:.2f}, {:.2f}]\n'.format(*slater_integrals))
         else:
-            raise IndexError('Property list {} '.format(general_parameters[param_name])
-                             + 'must have length 1 or n_inequiv_shells')
+            raise NotImplementedError('Hamiltonian for n_orb = {} NOT supported'.format(n_orb))
 
-        return general_parameters
+
+        # Construct Hamiltonian
+        mpi.report('Constructing the interaction Hamiltonian for shell {}'.format(icrsh))
+        if general_parameters['h_int_type'] == 1:
+            # 1. density-density
+            mpi.report('Using the density-density Hamiltonian')
+
+            # Transposes rotation matrix here because TRIQS has a slightly different definition
+            # TODO: this might not be consistent with the way the W90 converter uses the rot_mat
+            Umat_full_rotated = transform_U_matrix(Umat_full, sum_k.rot_mat[ish].T)
+            if not np.allclose(Umat_full_rotated, Umat_full):
+                mpi.report('WARNING: applying a rotation matrix changes the dens-dens Hamiltonian.\n'
+                           + 'This changes the definition of the ignored spin flip and pair hopping.')
+
+            Umat, Upmat = reduce_4index_to_2index(Umat_full_rotated)
+            h_int[icrsh] = h_int_density(general_parameters['spin_names'], orb_names,
+                                         map_operator_structure=sum_k.sumk_to_solver[icrsh],
+                                         U=Umat, Uprime=Upmat, H_dump=os.path.join(general_parameters['jobname'], 'H.txt'))
+        elif general_parameters['h_int_type'] == 2:
+            # 2. Kanamori Hamiltonian
+            mpi.report('Using the Kanamori Hamiltonian (with spin-flip and pair-hopping)')
+            h_int[icrsh] = h_int_kanamori(general_parameters['spin_names'], orb_names,
+                                          map_operator_structure=sum_k.sumk_to_solver[icrsh],
+                                          off_diag=True, U=Umat, Uprime=Upmat, J_hund=general_parameters['J'][icrsh],
+                                          H_dump=os.path.join(general_parameters['jobname'], 'H.txt'))
+        elif general_parameters['h_int_type'] == 3:
+            # 3. Rotationally-invariant Slater Hamiltonian (4-index)
+            Umat_full_rotated = transform_U_matrix(Umat_full, sum_k.rot_mat[ish].T)
+            if not np.allclose(Umat_full_rotated, Umat_full):
+                mpi.report('WARNING: applying a rotation matrix changes the interaction Hamiltonian.\n'
+                           + 'Please be sure that the rotation is correct!')
+
+            h_int[icrsh] = h_int_slater(general_parameters['spin_names'], orb_names,
+                                        map_operator_structure=sum_k.sumk_to_solver[icrsh],
+                                        off_diag=True, U_matrix=Umat_full_rotated,
+                                        H_dump=os.path.join(general_parameters['jobname'], 'H.txt'))
+
+
+    return h_int
+
 
 def dmft_cycle(general_parameters, solver_parameters, advanced_parameters, observables):
     """
@@ -148,8 +290,9 @@ def dmft_cycle(general_parameters, solver_parameters, advanced_parameters, obser
             archive.create_group('DMFT_results')
         if not 'last_iter' in archive['DMFT_results']:
             archive['DMFT_results'].create_group('last_iter')
-        if not 'DMFT_input'  in archive:
+        if not 'DMFT_input' in archive:
             archive.create_group('DMFT_input')
+            archive['DMFT_input'].create_group('solver')
         if 'iteration_count' in archive['DMFT_results']:
             iteration_offset = archive['DMFT_results']['iteration_count']
             sum_k.chemical_potential = archive['DMFT_results']['last_iter']['chemical_potential']
@@ -211,11 +354,11 @@ def dmft_cycle(general_parameters, solver_parameters, advanced_parameters, obser
         else:
             sum_k.deg_shells = deg_shells
         sum_k.rot_mat = sum_k_old.rot_mat
-        toolset.print_block_sym(sum_k, shell_multiplicity)
     else:
         sum_k.read_input_from_hdf(subgrp='DMFT_input', things_to_read=['block_structure', 'rot_mat'])
         sum_k.deg_shells = deg_shells
-        toolset.print_block_sym(sum_k, shell_multiplicity)
+
+    toolset.print_block_sym(sum_k)
 
     # for CSC calculations this does not work
     if general_parameters['magnetic'] and not general_parameters['csc']:
@@ -278,82 +421,9 @@ def dmft_cycle(general_parameters, solver_parameters, advanced_parameters, obser
     general_parameters['afm_order'] = mpi.bcast(general_parameters['afm_order'])
     afm_mapping = mpi.bcast(afm_mapping)
 
-    # build interacting local hamiltonain
-    h_int = []
+    # Initializes the solvers
     solvers = []
-
-    # extract U and J
-    mpi.report('*** interaction parameters ***')
-    for param_name in ('U', 'J'):
-        general_parameters = _extract_U_J_list(param_name, sum_k.n_inequiv_shells, general_parameters)
-
-    ## Initialise the Hamiltonian and Solver
     for icrsh in range(sum_k.n_inequiv_shells):
-        # ish points to the shell representative of the current group
-        ish = sum_k.inequiv_to_corr[icrsh]
-        n_orb = sum_k.corr_shells[ish]['dim']
-#        l = sum_k.corr_shells[ish]['l']
-        orb_names = list(range(n_orb))
-
-        # Construct U matrix of general kanamori type calculations
-        if n_orb in (2, 3): # e_g or t_2g cases
-            Umat, Upmat = U_matrix_kanamori(n_orb=n_orb, U_int=general_parameters['U'][icrsh],
-                                            J_hund=general_parameters['J'][icrsh])
-        elif n_orb == 5:
-            # Kanamori cannot be used with the full d-shell
-            if general_parameters['h_int_type'] == 2:
-                raise ValueError('The Kanamori Hamiltonian cannot be used for the full'
-                                 + 'd shell. It only applies to the eg _or_ t2g subset.')
-
-            # This is correct when used with the density-density Hamiltonian
-            Umat_full = U_matrix(l=2, U_int=general_parameters['U'][icrsh],
-                                 J_hund=general_parameters['J'][icrsh], basis='cubic')
-            # reduce full 4-index interaction matrix to 2-index
-            Umat, Upmat = reduce_4index_to_2index(Umat_full)
-            if mpi.is_master_node():
-                print('''Note: The input parameters U and J here are orbital-averaged parameters.
-                         Same definition of U and J as in DFT+U, see
-                         https://cms.mpi.univie.ac.at/wiki/index.php/LDAUTYPE.
-
-                         WARNING: Each orbital is treated differently. Make sure that
-                         the order of input orbitals corresponds to the order in U_matrix,
-                         see https://triqs.github.io/triqs/2.1.x/reference/operators/util/U_matrix.html'''
-                         + '#pytriqs.operators.util.U_matrix.spherical_to_cubic')
-
-                slater_integrals = U_J_to_radial_integrals(l=2, U_int=general_parameters['U'][icrsh],
-                                                           J_hund=general_parameters['J'][icrsh])
-                print('The corresponding slater integrals are')
-                print('[F0, F2, F4] = [{F[0]:.2f}, {F[1]:.2f}, {F[2]:.2f}]\n'.format(F=slater_integrals))
-        else:
-            mpi.report('\n*** Hamiltonian for n_orb = {} NOT supported'.format(n_orb))
-            sys.exit(2)
-
-        # Construct Hamiltonian
-        mpi.report('Constructing the interaction Hamiltonian for shell {}'.format(icrsh))
-        if general_parameters['h_int_type'] == 1:
-            # 1. density-density
-            mpi.report('Using the density-density Hamiltonian ')
-            h_int.append(h_int_density(general_parameters['spin_names'], orb_names,
-                                       map_operator_structure=sum_k.sumk_to_solver[icrsh],
-                                       U=Umat, Uprime=Upmat, H_dump=general_parameters['jobname']+'/'+'H.txt'))
-        elif general_parameters['h_int_type'] == 2:
-            # 2. Kanamori Hamiltonian
-            mpi.report('Using the Kanamori Hamiltonian (with spin-flip and pair-hopping) ')
-            h_int.append(h_int_kanamori(general_parameters['spin_names'], orb_names, map_operator_structure=sum_k.sumk_to_solver[icrsh],
-                                        off_diag=True, U=Umat, Uprime=Upmat, J_hund=general_parameters['J'][icrsh],
-                                        H_dump=general_parameters['jobname']+'/'+'H.txt'))
-        elif general_parameters['h_int_type'] == 3:
-            # 3. Rotationally-invariant Slater Hamiltonian (4-index)
-            raise NotImplementedError('4-index Slater Hamiltonian not implemented.')
-            h_int.append(h_int_slater(general_parameters['spin_names'], orb_names_all,
-                                      map_operator_structure=map_all,
-                                      off_diag=True, U_matrix=Umat_full,
-                                      H_dump=general_parameters['jobname']+'/'+'H_full.txt'))
-
-        # save h_int to h5 archive
-        if mpi.is_master_node():
-            archive['DMFT_input']['h_int'] = h_int
-
         ####################################
         # hotfix for new triqs 2.0 gf_struct_solver is still a dict
         # but cthyb 2.0 expects a list of pairs ####
@@ -368,6 +438,11 @@ def dmft_cycle(general_parameters, solver_parameters, advanced_parameters, obser
 
     # if Sigma is loaded, mu needs to be calculated again
     calc_mu = False
+
+    # extract U and J
+    mpi.report('*** interaction parameters ***')
+    for param_name in ('U', 'J'):
+        general_parameters = _extract_U_J_list(param_name, sum_k.n_inequiv_shells, general_parameters)
 
     # Prepare hdf file and and check for previous iterations
     if mpi.is_master_node():
@@ -448,45 +523,19 @@ def dmft_cycle(general_parameters, solver_parameters, advanced_parameters, obser
         density_shell_dft[icrsh] = G_loc_all_dft[icrsh].total_density()
         mpi.report('total density for imp '+str(icrsh)+' from DFT: '+str(density_shell_dft[icrsh]))
 
-
-    # extracting new rotation matrices from density_mat or local Hamiltonian
-    if ((general_parameters['set_rot'] == 'hloc' or general_parameters['set_rot'] == 'den')
-            and iteration_offset == 0 and not general_parameters['load_sigma']):
-        if general_parameters['set_rot'] == 'hloc':
-            q_diag = sum_k.eff_atomic_levels()
-            chnl = 'up'
-        elif general_parameters['set_rot'] == 'den':
-            q_diag = density_mat_dft
-            chnl = 'up_0'
-
-        rot_mat = []
-        for icrsh in range(sum_k.n_corr_shells):
-            ish = sum_k.corr_to_inequiv[icrsh]
-            _, eigvec = np.linalg.eigh(np.real(q_diag[ish][chnl]))
-            rot_mat_local = np.array(eigvec) + 0.j
-
-            rot_mat.append(rot_mat_local)
-
-        sum_k.rot_mat = rot_mat
-        mpi.report('Updating rotation matrices using dft {} eigenbasis to maximise sign'.format(general_parameters['set_rot']))
-
-        if mpi.is_master_node():
-            print('\n new rotation matrices ')
-            # rotation matrices
-            for icrsh in range(sum_k.n_corr_shells):
-                n_orb = sum_k.corr_shells[icrsh]['dim']
-                print('rot_mat[{:2d}] '.format(icrsh)+'real part'.center(9*n_orb)+'  '+'imaginary part'.center(9*n_orb))
-                rot = np.matrix(sum_k.rot_mat[icrsh])
-                for irow in range(n_orb):
-                    fmt = '{:9.5f}' * n_orb
-                    row = np.real(rot[irow, :]).tolist()[0] + np.imag(rot[irow, :]).tolist()[0]
-                    print((' '*11 + fmt + '  ' + fmt).format(*row))
-
-            print('\n')
-
+    # Generates a rotation matrix to change the basis
+    if (general_parameters['set_rot'] != 'none' and iteration_offset == 0
+            and not general_parameters['load_sigma']):
+        sum_k = _calculate_rotation_matrix(general_parameters, sum_k, iteration_offset, density_mat_dft)
+    # Saves rotation matrix to h5 archive:
     if mpi.is_master_node() and iteration_offset == 0:
-        # saving rot mat to h5 archive:
         archive['DMFT_input']['rot_mat'] = sum_k.rot_mat
+
+    # Constructs the interaction Hamiltonian. Needs to come after setting sum_k.rot_mat
+    h_int = _construct_interaction_hamiltonian(sum_k, general_parameters)
+    # Saves h_int to h5 archive
+    if mpi.is_master_node():
+        archive['DMFT_input']['h_int'] = h_int
 
     #Double Counting if first iteration or if CSC calculation with DFTDC
     if general_parameters['dc'] and ((iteration_offset == 0 and not general_parameters['load_sigma']) or
@@ -563,10 +612,10 @@ def dmft_cycle(general_parameters, solver_parameters, advanced_parameters, obser
 
     if converged and general_parameters['csc']:
         # is there a smoother way to stop both vasp and triqs from running after convergency is reached?
+        # TODO: this does not close vasp properly, make the same as in csc_flow
         if mpi.is_master_node():
-            f_stop = open('STOPCAR', 'wt')
-            f_stop.write('LABORT = .TRUE.\n')
-            f_stop.close()
+            with open('STOPCAR', 'wt') as f_stop:
+                f_stop.write('LABORT = .TRUE.\n')
             del archive
         mpi.MPI.COMM_WORLD.Abort(1)
 
@@ -625,23 +674,28 @@ def _dmft_steps(iteration_offset, n_iter, sum_k, solvers, G_loc_all, general_par
 
             # prepare our G_tau and G_l used to save the 'good' G_tau
             glist_tau = []
-            if solver_parameters['measure_G_l']:
+            if solver_parameters['measure_G_l'] or general_parameters['legendre_fit']:
                 glist_l = []
             for name, g in solvers[icrsh].G0_iw:
                 glist_tau.append(GfImTime(indices=g.indices,
                                           beta=general_parameters['beta'],
                                           n_points=solvers[icrsh].n_tau))
-                if solver_parameters['measure_G_l']:
+                if solver_parameters['measure_G_l'] or general_parameters['legendre_fit']:
                     glist_l.append(GfLegendre(indices=g.indices,
                                               beta=general_parameters['beta'],
                                               n_points=general_parameters['n_LegCoeff']))
 
-            # we will call it G_tau_man for a manual build G_tau
-            solvers[icrsh].G_tau_man = BlockGf(name_list=sum_k.gf_struct_solver[icrsh].keys(),
+            # we will call it G_tau_orig to store original G_tau
+            solvers[icrsh].G_tau_orig = BlockGf(name_list=sum_k.gf_struct_solver[icrsh].keys(),
                                                block_list=glist_tau, make_copies=True)
-            if solver_parameters['measure_G_l']:
+            if solver_parameters['measure_G_l'] or general_parameters['legendre_fit']:
                 solvers[icrsh].G_l_man = BlockGf(name_list=sum_k.gf_struct_solver[icrsh].keys(),
                                                  block_list=glist_l, make_copies=True)
+
+             # store solver to h5 archive
+            if general_parameters['store_solver'] and mpi.is_master_node():
+                archive['DMFT_input']['solver'].create_group('it_'+str(it))
+                archive['DMFT_input']['solver']['it_'+str(it)]['S_'+str(icrsh)] = solvers[icrsh]
 
             # if we do a AFM calculation we can use the init magnetic moments to
             # copy the self energy instead of solving it explicitly
@@ -659,7 +713,7 @@ def _dmft_steps(iteration_offset, n_iter, sum_k, solvers, G_loc_all, general_par
                             target_channel = 'up'+spin_channel.replace('down', '')
 
                         solvers[icrsh].Sigma_iw[spin_channel] << solvers[imp_source].Sigma_iw[target_channel]
-                        solvers[icrsh].G_tau_man[spin_channel] << solvers[imp_source].G_tau_man[target_channel]
+                        solvers[icrsh].G_tau_orig[spin_channel] << solvers[imp_source].G_tau_orig[target_channel]
                         solvers[icrsh].G_iw[spin_channel] << solvers[imp_source].G_iw[target_channel]
                         solvers[icrsh].G0_iw[spin_channel] << solvers[imp_source].G0_iw[target_channel]
                         if solver_parameters['measure_G_l']:
@@ -667,7 +721,7 @@ def _dmft_steps(iteration_offset, n_iter, sum_k, solvers, G_loc_all, general_par
 
                 else:
                     solvers[icrsh].Sigma_iw << solvers[imp_source].Sigma_iw
-                    solvers[icrsh].G_tau_man << solvers[imp_source].G_tau_man
+                    solvers[icrsh].G_tau_orig << solvers[imp_source].G_tau_orig
                     solvers[icrsh].G_iw << solvers[imp_source].G_iw
                     solvers[icrsh].G0_iw << solvers[imp_source].G0_iw
                     if solver_parameters['measure_G_l']:
@@ -687,13 +741,14 @@ def _dmft_steps(iteration_offset, n_iter, sum_k, solvers, G_loc_all, general_par
                 if solver_parameters['measure_G_l']:
                     solvers[icrsh].Sigma_iw_orig = solvers[icrsh].Sigma_iw.copy()
                     solvers[icrsh].G_iw_from_leg = solvers[icrsh].G_iw.copy()
+                    solvers[icrsh].G_tau_orig = solvers[icrsh].G_tau.copy()
                     solvers[icrsh].G_l_man << solvers[icrsh].G_l
                     if mpi.is_master_node():
                         for i, g in solvers[icrsh].G_l:
                             g.enforce_discontinuity(np.identity(g.target_shape[0]))
                             solvers[icrsh].G_iw[i].set_from_legendre(g)
                             # update G_tau as well:
-                            solvers[icrsh].G_tau_man[i] << Fourier(solvers[icrsh].G_iw[i])
+                            solvers[icrsh].G_tau[i] << Fourier(solvers[icrsh].G_iw[i])
                         # Symmetrize
                         solvers[icrsh].G_iw << make_hermitian(solvers[icrsh].G_iw)
                         # set Sigma and G_iw from G_l
@@ -703,10 +758,38 @@ def _dmft_steps(iteration_offset, n_iter, sum_k, solvers, G_loc_all, general_par
                     solvers[icrsh].Sigma_iw_orig << mpi.bcast(solvers[icrsh].Sigma_iw_orig)
                     solvers[icrsh].Sigma_iw << mpi.bcast(solvers[icrsh].Sigma_iw)
                     solvers[icrsh].G_iw << mpi.bcast(solvers[icrsh].G_iw)
-                    solvers[icrsh].G_tau_man << mpi.bcast(solvers[icrsh].G_tau_man)
+                    solvers[icrsh].G_tau << mpi.bcast(solvers[icrsh].G_tau)
                 else:
-                    solvers[icrsh].G_tau_man << solvers[icrsh].G_tau
+                    solvers[icrsh].G_tau_orig << solvers[icrsh].G_tau
                     solvers[icrsh].G_iw << make_hermitian(solvers[icrsh].G_iw)
+
+                    if general_parameters['legendre_fit']:
+                        solvers[icrsh].Sigma_iw_orig = solvers[icrsh].Sigma_iw.copy()
+                        solvers[icrsh].G_iw_from_leg = solvers[icrsh].G_iw.copy()
+                        solvers[icrsh].G_tau_orig = solvers[icrsh].G_tau.copy()
+
+                        if mpi.is_master_node():
+                            # run the filter
+                            solvers[icrsh].G_l_man << toolset.legendre_filter(solvers[icrsh].G_tau,
+                                                                              general_parameters['n_LegCoeff'])
+
+                            # create new G_iw and G_tau
+                            for i, g in solvers[icrsh].G_l_man:
+                                solvers[icrsh].G_iw[i].set_from_legendre(g)
+                                # update G_tau as well:
+                                solvers[icrsh].G_tau[i] << Fourier(solvers[icrsh].G_iw[i])
+                            # Symmetrize
+                            solvers[icrsh].G_iw << make_hermitian(solvers[icrsh].G_iw)
+                            # set Sigma and G_iw from G_l
+                            solvers[icrsh].Sigma_iw << inverse(solvers[icrsh].G0_iw) - inverse(solvers[icrsh].G_iw)
+
+
+                        # broadcast new G, Sigmas to all other nodes
+                        solvers[icrsh].Sigma_iw << mpi.bcast(solvers[icrsh].Sigma_iw)
+                        solvers[icrsh].G_l_man << mpi.bcast(solvers[icrsh].G_l_man)
+                        solvers[icrsh].G_iw << mpi.bcast(solvers[icrsh].G_iw)
+                        solvers[icrsh].G_tau << mpi.bcast(solvers[icrsh].G_tau)
+
 
             # some printout of the obtained density matrices and some basic checks
             density_shell[icrsh] = solvers[icrsh].G_iw.total_density()
@@ -788,9 +871,11 @@ def _dmft_steps(iteration_offset, n_iter, sum_k, solvers, G_loc_all, general_par
             archive['DMFT_results']['last_iter']['dens_mat_post'] = density_mat
             for icrsh in range(sum_k.n_inequiv_shells):
                 archive['DMFT_results']['last_iter']['G0_iw'+str(icrsh)] = solvers[icrsh].G0_iw
-                archive['DMFT_results']['last_iter']['Gimp_tau_'+str(icrsh)] = solvers[icrsh].G_tau_man
-                if solver_parameters['measure_G_l']:
+                archive['DMFT_results']['last_iter']['Delta_tau'+str(icrsh)] = solvers[icrsh].Delta_tau
+                archive['DMFT_results']['last_iter']['Gimp_tau_'+str(icrsh)] = solvers[icrsh].G_tau
+                if solver_parameters['measure_G_l'] or general_parameters['legendre_fit']:
                     archive['DMFT_results']['last_iter']['Gimp_l_'+str(icrsh)] = solvers[icrsh].G_l_man
+                    archive['DMFT_results']['last_iter']['Gimp_tau_orig_'+str(icrsh)] = solvers[icrsh].G_tau_orig
                 archive['DMFT_results']['last_iter']['Gimp_iw_'+str(icrsh)] = solvers[icrsh].G_iw
                 archive['DMFT_results']['last_iter']['Sigma_iw_'+str(icrsh)] = solvers[icrsh].Sigma_iw
 
@@ -804,9 +889,11 @@ def _dmft_steps(iteration_offset, n_iter, sum_k, solvers, G_loc_all, general_par
                 archive['DMFT_results']['it_'+str(it)]['dens_mat_post'] = density_mat
                 for icrsh in range(sum_k.n_inequiv_shells):
                     archive['DMFT_results']['it_'+str(it)]['G0_iw'+str(icrsh)] = solvers[icrsh].G0_iw
-                    archive['DMFT_results']['it_'+str(it)]['Gimp_tau_'+str(icrsh)] = solvers[icrsh].G_tau_man
-                    if solver_parameters['measure_G_l']:
+                    archive['DMFT_results']['last_iter']['Delta_tau'+str(icrsh)] = solvers[icrsh].Delta_tau
+                    archive['DMFT_results']['it_'+str(it)]['Gimp_tau_'+str(icrsh)] = solvers[icrsh].G_tau
+                    if solver_parameters['measure_G_l'] or general_parameters['legendre_fit']:
                         archive['DMFT_results']['it_'+str(it)]['Gimp_l_'+str(icrsh)] = solvers[icrsh].G_l_man
+                        archive['DMFT_results']['it_'+str(it)]['Gimp_tau_orig_'+str(icrsh)] = solvers[icrsh].G_tau_orig
                     archive['DMFT_results']['it_'+str(it)]['Gimp_iw_'+str(icrsh)] = solvers[icrsh].G_iw
                     archive['DMFT_results']['it_'+str(it)]['Sigma_iw_'+str(icrsh)] = solvers[icrsh].Sigma_iw
 

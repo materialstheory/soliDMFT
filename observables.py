@@ -60,7 +60,6 @@ def prep_observables(general_parameters, h5_archive):
         observables['orb_occ'] = [{'up': [], 'down': []} for _ in range(n_inequiv_shells)]
         observables['imp_occ'] = [{'up': [], 'down': []} for _ in range(n_inequiv_shells)]
         observables['rho'] = [[] for _ in range(n_inequiv_shells)]
-        observables['h_loc'] = [[] for _ in range(n_inequiv_shells)]
         observables['h_loc_diag'] = [[] for _ in range(n_inequiv_shells)]
 
     return observables
@@ -184,17 +183,13 @@ def calc_obs(observables, general_parameters, solver_parameters, it, solvers, h_
             occ_orb_up = []
             occ_orb_down = []
 
-            for icrsh in range(sum_k.n_inequiv_shells):
-                E_DC += shell_multiplicity[icrsh]*sum_k.dc_energ[sum_k.inequiv_to_corr[icrsh]]
-
-            # for it 0 we just subtract E_DC from E_DFT
-            observables['E_tot'].append(E_dft - E_DC)
-
             # iterate over all spin channels and add the to up or down
-            for spin_channel in sum_k.gf_struct_solver[icrsh]:
+            # we need only the keys of the blocks, but sorted! Otherwise
+            # orbitals will be mixed up_0 to down_0 etc.
+            for spin_channel in sorted(sum_k.gf_struct_solver[icrsh].keys()):
 
                 # G(beta/2)
-                G_tau = GfImTime(indices=solvers[icrsh].G_tau_man[spin_channel].indices,
+                G_tau = GfImTime(indices=solvers[icrsh].G_tau[spin_channel].indices,
                                  beta=general_parameters['beta'])
                 G_tau << Fourier(G_loc_all_dft[icrsh][spin_channel])
 
@@ -238,6 +233,10 @@ def calc_obs(observables, general_parameters, solver_parameters, it, solvers, h_
             observables['imp_occ'][icrsh]['up'].append(occ_imp_up)
             observables['imp_occ'][icrsh]['down'].append(occ_imp_down)
 
+
+        # for it 0 we just subtract E_DC from E_DFT
+        observables['E_tot'].append(E_dft - sum(i[0] for i in observables['E_DC']) )
+
         # write the DFT observables to the files
         write_obs(observables, sum_k, general_parameters)
 
@@ -255,9 +254,6 @@ def calc_obs(observables, general_parameters, solver_parameters, it, solvers, h_
                 mpi.report("\nextracting the impurity density matrix")
             # Extract accumulated density matrix
             observables["rho"][icrsh].append( solvers[icrsh].density_matrix )
-
-            # storing the local Hamiltonian
-            observables["h_loc"][icrsh].append( solvers[icrsh].h_loc )
 
             # Object containing eigensystem of the local Hamiltonian
             observables["h_loc_diag"][icrsh].append( solvers[icrsh].h_loc_diagonalization )
@@ -306,16 +302,15 @@ def calc_obs(observables, general_parameters, solver_parameters, it, solvers, h_
 
 
         # iterate over all spin channels and add the to up or down
-        for spin_channel, _ in sum_k.gf_struct_solver[icrsh].iteritems():
+        for spin_channel in sorted(sum_k.gf_struct_solver[icrsh].keys()):
 
             # G(beta/2)
-#            mesh_len = len(solvers[icrsh].G_tau_man[spin_channel].data)
-            mesh_mid = int(len(solvers[icrsh].G_tau_man[spin_channel].data)/2)
+            mesh_mid = int(len(solvers[icrsh].G_tau[spin_channel].data)/2)
             # since G(tau) has always 10001 values we are sampling +-10 values
             # hard coded, for beta=40 this corresponds to approx +-0.05
             samp = 10
             # we are sampling a few values around G(beta/2+-0.05)
-            gg = solvers[icrsh].G_tau_man[spin_channel].data[mesh_mid-samp:mesh_mid+samp]
+            gg = solvers[icrsh].G_tau[spin_channel].data[mesh_mid-samp:mesh_mid+samp]
             # taking the diagonal elements of the sum of the G(beta/2) matrices
             gb2_list = np.diagonal(np.real(sum(gg)/float(2*samp)))
 

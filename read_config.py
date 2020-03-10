@@ -30,7 +30,10 @@ def read_config(config_file):
     plo_cfg : str, optional, default='plo.cfg'
                 config file for PLOs for the converter
     h_int_type : int
-                interaction type # 1=dens-dens 2=kanamori 3=full-slater
+                interaction type
+                1 = density-density: currently only implemented for 5 orbitals
+                2 = Kanamori: only defined for either the t2g or the eg subset
+                3 = full Slater: currently not implemented
     U :  float or comma seperated list of floats
                 U values for impurities if only one value is given, the same U is assumed for all impurities
     J :  float or comma seperated list of floats
@@ -97,6 +100,8 @@ def read_config(config_file):
     afm_order : bool, optional, default=False
                 copy self energies instead of solving explicitly for afm order
     set_rot : string, optional, default='none'
+                Do NOT use this when your converter gives you a non-identity matrix.
+                Therefore, can't generally be used with Wannier90.
                 use density_mat_dft to diagonalize occupations = 'den'
                 use hloc_dft to diagonalize occupations = 'hloc'
     oneshot_postproc_gamma_file : bool, optional, default=False
@@ -112,6 +117,8 @@ def read_config(config_file):
                 total number of sweeps
     measure_g_l : bool
                 measure Legendre Greens function
+    n_LegCoeff : int
+                number of Legendre coefficients
     max_time : int, optional, default=-1
                 maximum amount the solver is allowed to spend in eacht iteration
     imag_threshold : float, optional, default= 10e-15
@@ -131,6 +138,13 @@ def read_config(config_file):
                 number of start matsubara frequency to start with
     fit_max_n : int, optional
                 number of highest matsubara frequency to fit
+    store_solver: bool, optional default = False
+                store the whole solver object under DMFT_input in h5 archive
+    random_seed: int, optional default by triqs
+                if specified the int will be used for random seeds! Careful, this will give the same random
+                numbers on all mpi ranks
+    legendre_fit: bool, optional default = False
+                filter noise of G(tau) with G_l, cutoff is taken from nLegCoeff
 
     __DFT code parameters (only for csc):__
     ----------
@@ -348,7 +362,6 @@ def read_config(config_file):
     solver_parameters['length_cycle'] = int(config['solver_parameters']['length_cycle'])
     solver_parameters['n_warmup_cycles'] = int(config['solver_parameters']['n_warmup_cycles'])
     solver_parameters['n_cycles'] = int(float(config['solver_parameters']['n_cycles_tot'])) // mpi.size
-    solver_parameters['measure_G_l'] = config['solver_parameters'].getboolean('measure_g_l')
 
     # optional stuff
     if 'max_time' in config['solver_parameters']:
@@ -374,26 +387,60 @@ def read_config(config_file):
     else:
         solver_parameters['move_double'] = True
 
-    #tailfitting only if legendre is off
-    if solver_parameters['measure_G_l']:
-        # little workaround since #leg coefficients is not directly a solver parameter
-        general_parameters['n_LegCoeff'] = int(config['solver_parameters']['n_LegCoeff'])
-        solver_parameters['perform_tail_fit'] = False
+    if 'move_shift' in config['solver_parameters']:
+        solver_parameters['move_shift'] = config['solver_parameters'].getboolean('move_shift')
     else:
-        if 'perform_tail_fit' in config['solver_parameters']:
-            solver_parameters['perform_tail_fit'] = config['solver_parameters'].getboolean('perform_tail_fit')
-        else:
+        solver_parameters['move_shift'] = True
+
+    if 'random_seed' in config['solver_parameters']:
+        solver_parameters['random_seed'] = int(config['solver_parameters']['random_seed'])
+
+
+    if 'perform_tail_fit' in config['solver_parameters']:
+        solver_parameters['perform_tail_fit'] = config['solver_parameters'].getboolean('perform_tail_fit')
+
+        # if tailfit get parameters for fit
+        if solver_parameters['perform_tail_fit']:
+            if 'fit_max_moment' in config['solver_parameters']:
+                solver_parameters['fit_max_moment'] = int(config['solver_parameters']['fit_max_moment'])
+            if 'fit_min_n' in config['solver_parameters']:
+                solver_parameters['fit_min_n'] = int(config['solver_parameters']['fit_min_n'])
+            if 'fit_max_n' in config['solver_parameters']:
+                solver_parameters['fit_max_n'] = int(config['solver_parameters']['fit_max_n'])
+    else:
+        solver_parameters['perform_tail_fit'] = False
+
+    if 'measure_G_l' in config['solver_parameters']:
+        solver_parameters['measure_G_l'] = config['solver_parameters'].getboolean('measure_G_l')
+
+        if solver_parameters['measure_G_l']:
+            # little workaround since #leg coefficients is not directly a solver parameter
+            general_parameters['n_LegCoeff'] = int(config['solver_parameters']['n_LegCoeff'])
+            # overwrite tail fitting!
             solver_parameters['perform_tail_fit'] = False
 
-    if 'fit_max_moment' in config['solver_parameters']:
-        solver_parameters['fit_max_moment'] = int(config['solver_parameters']['fit_max_moment'])
+    if 'legendre_fit' in config['solver_parameters']:
+        general_parameters['legendre_fit'] = config['solver_parameters'].getboolean('legendre_fit')
 
-    if 'fit_min_n' in config['solver_parameters']:
-        solver_parameters['fit_min_n'] = int(config['solver_parameters']['fit_min_n'])
+        # not compatible with tail fit or legendre sampling
+        if general_parameters['legendre_fit'] and solver_parameters['measure_G_l']:
+            print('\n Warning! legendre fit for Gtau can only be used without Gl measurement! Setting legendre_fit to false\n ')
+            general_parameters['legendre_fit'] = False
+        if general_parameters['legendre_fit'] and solver_parameters['perform_tail_fit']:
+            print('\n Warning! legendre fit for Gtau can only be used without tail fitting! Setting legendre_fit to false\n ')
+            general_parameters['legendre_fit'] = False
 
-    if 'fit_max_n' in config['solver_parameters']:
-        solver_parameters['fit_max_n'] = int(config['solver_parameters']['fit_max_n'])
+        # number of legendre coefficients
+        if general_parameters['legendre_fit']:
+            general_parameters['n_LegCoeff'] = int(config['solver_parameters']['n_LegCoeff'])
 
+    else:
+        general_parameters['legendre_fit'] = False
+
+    if 'store_solver' in config['solver_parameters']:
+        general_parameters['store_solver'] = config['solver_parameters'].getboolean('store_solver')
+    else:
+        general_parameters['store_solver'] = False
 
     # advanced parameters: non-standard DMFT settings
     if 'advanced_parameters' in config and 'dc_factor' in config['advanced_parameters']:
