@@ -1,24 +1,25 @@
 # contains all functions related to the observables
 # prep_observables
 # prepare_obs_files
-# calc_obs
+# add_dmft_observables
 # write_obs
 # calc_dft_kin_en
 # calc_bandcorr_man
 
 # system
 import numpy as np
+import os.path
 
 # triqs
 import pytriqs.utility.mpi as mpi
-from pytriqs.gf import GfImTime
+from pytriqs.gf import GfImTime, Gf, MeshImTime
 from pytriqs.atom_diag import trace_rho_op
 from pytriqs.gf.descriptors import Fourier
 
 
 import toolset
 
-def prep_observables(general_parameters, h5_archive):
+def prep_observables(h5_archive):
     """
     prepares the observable arrays and files for the DMFT calculation
 
@@ -59,14 +60,48 @@ def prep_observables(general_parameters, h5_archive):
         observables['imp_gb2'] = [{'up': [], 'down': []} for _ in range(n_inequiv_shells)]
         observables['orb_occ'] = [{'up': [], 'down': []} for _ in range(n_inequiv_shells)]
         observables['imp_occ'] = [{'up': [], 'down': []} for _ in range(n_inequiv_shells)]
-        observables['rho'] = [[] for _ in range(n_inequiv_shells)]
-        observables['h_loc_diag'] = [[] for _ in range(n_inequiv_shells)]
 
     return observables
 
-def prepare_obs_files(general_parameters, n_inequiv_shells, n_orbitals):
+def _generate_header(general_parameters, sum_k):
     """
-    Prepares the observable files for writing
+    Generates the headers that are used in write_header_to_file.
+    Returns a dict with {file_name: header_string}
+    """
+    n_orbitals = [sum_k.corr_shells[sum_k.inequiv_to_corr[iineq]]['dim']
+                  for iineq in range(sum_k.n_inequiv_shells)]
+
+    header_energy_mask = ' | {:>10} | {:>10}   {:>10}   {:>10}   {:>10}'
+    header_energy = header_energy_mask.format('E_tot', 'E_DFT', 'E_bandcorr', 'E_int_imp', 'E_DC')
+
+    headers = {}
+    for iineq in range(sum_k.n_inequiv_shells):
+        number_spaces = max(10*n_orbitals[iineq] + 3*(n_orbitals[iineq]-1), 21)
+        header_basic_mask = '{{:>3}} | {{:>10}} | {{:>{0}}} | {{:>{0}}} | {{:>17}}'.format(number_spaces)
+
+        # If magnetic calculation is done create two obs files per imp
+        if general_parameters['magnetic']:
+            for spin in ('up', 'down'):
+                file_name = 'observables_imp{}_{}.dat'.format(iineq, spin)
+                headers[file_name] = header_basic_mask.format('it', 'mu', 'G(beta/2) per orbital',
+                                                             'orbital occs '+spin, 'impurity occ '+spin)
+
+                if general_parameters['calc_energies']:
+                    headers[file_name] += header_energy
+        else:
+            file_name = 'observables_imp{}.dat'.format(iineq)
+            headers[file_name] = header_basic_mask.format('it', 'mu', 'G(beta/2) per orbital',
+                                                         'orbital occs up+down', 'impurity occ')
+
+            if general_parameters['calc_energies']:
+                headers[file_name] += header_energy
+
+    return headers
+
+
+def write_header_to_file(general_parameters, sum_k):
+    """
+    Writes the header to the observable files
 
     Parameters
     ----------
@@ -78,37 +113,115 @@ def prepare_obs_files(general_parameters, n_inequiv_shells, n_orbitals):
 
     __Returns:__
     nothing
-
     """
-    header_energy_mask = ' | {:>10} | {:>10}   {:>10}   {:>10}   {:>10}'
-    header_energy = header_energy_mask.format('E_tot', 'E_DFT', 'E_bandcorr', 'E_int_imp', 'E_DC')
 
-    for icrsh in range(n_inequiv_shells):
-        number_spaces = max(10*n_orbitals[icrsh] + 3*(n_orbitals[icrsh]-1), 21)
-        header_basic_mask = '{{:>3}} | {{:>10}} | {{:>{}}} | {{:>{}}} | {{:>17}}'.format(number_spaces, number_spaces)
+    headers = _generate_header(general_parameters, sum_k)
 
-        # If magnetic calculation is done create two obs files per imp
-        if general_parameters['magnetic']:
-            for spin in ('up', 'down'):
-                header = header_basic_mask.format('it', 'mu', 'G(beta/2) per orbital', 'orbital occs '+spin, 'impurity occ '+spin)
+    for file_name, header in headers.items():
+        path = os.path.join(general_parameters['jobname'], file_name)
+        with open(path, 'w') as obs_file:
+            obs_file.write(header + '\n')
 
-                if general_parameters['calc_energies']:
-                    header += header_energy
 
-                file_name = '{}/observables_imp{}_{}.dat'.format(general_parameters['jobname'], icrsh, spin)
-                with open(file_name, 'w') as obs_file:
-                    obs_file.write(header + '\n')
+def add_dft_values_as_zeroth_iteration(observables, general_parameters, dft_mu,
+                                         sum_k, G_loc_all_dft, density_mat_dft, shell_multiplicity):
+    """
+    Calculates the DFT observables that should be written as the zeroth iteration.
+
+    Parameters
+    ----------
+    observables : observable arrays/dicts
+
+    general_parameters : general parameters as a dict
+
+    dft_mu : dft chemical potential
+
+    sum_k : SumK Object instances
+
+    G_loc_all_dft : Gloc from DFT for G(beta/2)
+
+    density_mat_dft : occupations from DFT
+
+    shell_multiplicity : degeneracy of impurities
+
+    __Returns:__
+
+    observables: list of dicts
+    """
+    observables['iteration'].append(0)
+    observables['mu'].append(float(dft_mu))
+
+    if general_parameters['calc_energies']:
+        observables['E_bandcorr'].append(0.0)
+        observables['E_corr_en'].append(0.0)
+        # Reads energy from OSZICAR for CSC calculations
+        E_dft = toolset.get_dft_energy() if general_parameters['csc'] else 0.0
+        observables['E_dft'].append(E_dft)
+    else:
+        observables['E_bandcorr'].append('none')
+        observables['E_corr_en'].append('none')
+        observables['E_dft'].append('none')
+
+    for iineq in range(sum_k.n_inequiv_shells):
+        if general_parameters['calc_energies']:
+            observables['E_int'][iineq].append(0.0)
+            double_counting_energy = shell_multiplicity[iineq]*sum_k.dc_energ[sum_k.inequiv_to_corr[iineq]] if general_parameters['dc'] else 0.0
+            observables['E_DC'][iineq].append(double_counting_energy)
         else:
-            header = header_basic_mask.format('it', 'mu', 'G(beta/2) per orbital', 'orbital occs up+down', 'impurity occ')
+            observables['E_int'][iineq].append('none')
+            observables['E_DC'][iineq].append('none')
 
-            if general_parameters['calc_energies']:
-                header += header_energy
+        # Collect all occupation and G(beta/2) for spin up and down separately
+        for spin in ('up', 'down'):
+            g_beta_half_per_impurity = 0.0
+            g_beta_half_per_orbital = []
+            occupation_per_impurity = 0.0
+            occupation_per_orbital = []
 
-            file_name = '{}/observables_imp{}.dat'.format(general_parameters['jobname'], icrsh)
-            with open(file_name, 'w') as obs_file:
-                obs_file.write(header + '\n')
+            # iterate over all spin channels and add the to up or down
+            # we need only the keys of the blocks, but sorted! Otherwise
+            # orbitals will be mixed up_0 to down_0 etc.
+            for spin_channel in sorted(sum_k.gf_struct_solver[iineq].keys()):
+                if not spin in spin_channel:
+                    continue
 
-def calc_obs(observables, general_parameters, solver_parameters, it, solvers, h_int, dft_mu, previous_mu, sum_k, G_loc_all_dft, density_mat_dft, density_mat, shell_multiplicity, E_bandcorr):
+                # G(beta/2)
+                mesh = MeshImTime(beta=general_parameters['beta'], S="Fermion", n_max=10001)
+                G_tau = Gf(mesh=mesh, indices=G_loc_all_dft[iineq][spin_channel].indices)
+                G_tau << Fourier(G_loc_all_dft[iineq][spin_channel])
+
+                # since G(tau) has always 10001 values we are sampling +-10 values
+                # hard coded around beta/2, for beta=40 this corresponds to approx +-0.05
+                mesh_mid = len(G_tau.data) // 2
+                samp = 10
+                gg = G_tau.data[mesh_mid-samp:mesh_mid+samp]
+                gb2_averaged = np.mean(np.real(gg), axis=0)
+
+                g_beta_half_per_orbital.extend(np.diag(gb2_averaged))
+                g_beta_half_per_impurity += np.trace(gb2_averaged)
+
+                # occupation per orbital
+                den_mat = np.real(density_mat_dft[iineq][spin_channel])
+                occupation_per_orbital.extend(np.diag(den_mat))
+                occupation_per_impurity += np.trace(den_mat)
+
+            # adding those values to the observable object
+            observables['orb_gb2'][iineq][spin].append(g_beta_half_per_orbital)
+            observables['imp_gb2'][iineq][spin].append(g_beta_half_per_impurity)
+            observables['orb_occ'][iineq][spin].append(occupation_per_orbital)
+            observables['imp_occ'][iineq][spin].append(occupation_per_impurity)
+
+    # for it 0 we just subtract E_DC from E_DFT
+    if general_parameters['calc_energies']:
+        observables['E_tot'].append(E_dft - np.sum(dc_per_imp[0] for dc_per_imp in observables['E_DC']))
+    else:
+        observables['E_tot'].append('none')
+
+    return observables
+
+
+def add_dmft_observables(observables, general_parameters, solver_parameters, it, solvers, h_int,
+             previous_mu, sum_k, density_mat, shell_multiplicity, E_bandcorr):
     """
     calculates the observables for given Input, I decided to calculate the observables
     not adhoc since it should be done only once by the master_node
@@ -127,15 +240,9 @@ def calc_obs(observables, general_parameters, solver_parameters, it, solvers, h_
 
     h_int : interaction hamiltonian
 
-    dft_mu : dft chemical potential
-
     previous_mu : dmft chemical potential for which the calculation was just done
 
     sum_k : SumK Object instances
-
-    G_loc_all_dft : Gloc from DFT for G(beta/2)
-
-    density_mat_dft : occupations from DFT
 
     density_mat : DMFT occupations
 
@@ -149,97 +256,9 @@ def calc_obs(observables, general_parameters, solver_parameters, it, solvers, h_
     """
 
     # init energy values
-    E_dft = 0.0
-    E_int = np.zeros(sum_k.n_inequiv_shells)
     E_corr_en = 0.0
-    E_DC = 0.0
-
-    if general_parameters['csc']:
-        # Read energy from OSZICAR
-        E_dft = toolset.get_dft_energy()
-
-    # write the DFT obs a 0 iteration
-    if it == 1:
-        observables['iteration'].append(0)
-        observables['mu'].append(float(dft_mu))
-        observables['E_bandcorr'].append(0.0)
-        observables['E_corr_en'].append(0.0)
-        observables['E_dft'].append(E_dft)
-
-        for icrsh in range(sum_k.n_inequiv_shells):
-            # determine number of orbitals per shell
-            observables['E_int'][icrsh].append(0.0)
-            if general_parameters['dc_type'] >= 0:
-                observables['E_DC'][icrsh].append(shell_multiplicity[icrsh]*sum_k.dc_energ[sum_k.inequiv_to_corr[icrsh]])
-            else:
-                observables['E_DC'][icrsh].append(0.0)
-
-            gb2_imp_up = 0.0
-            gb2_imp_down = 0.0
-            gb2_orb_up = []
-            gb2_orb_down = []
-            occ_imp_up = 0.0
-            occ_imp_down = 0.0
-            occ_orb_up = []
-            occ_orb_down = []
-
-            # iterate over all spin channels and add the to up or down
-            # we need only the keys of the blocks, but sorted! Otherwise
-            # orbitals will be mixed up_0 to down_0 etc.
-            for spin_channel in sorted(sum_k.gf_struct_solver[icrsh].keys()):
-
-                # G(beta/2)
-                G_tau = GfImTime(indices=solvers[icrsh].G_tau[spin_channel].indices,
-                                 beta=general_parameters['beta'])
-                G_tau << Fourier(G_loc_all_dft[icrsh][spin_channel])
-
-                mesh_mid = int(len(G_tau.data)/2)
-                # since G(tau) has always 10001 values we are sampling +-10 values
-                # hard coded, for beta=40 this corresponds to approx +-0.05
-                samp = 10
-                # we are sampling a few values around G(beta/2)
-                gg = G_tau.data[mesh_mid-samp:mesh_mid+samp]
-                # taking the diagonal elements of the sum of the G(beta/2) matrices
-                gb2_list = np.diagonal(np.real(sum(gg)/float(2*samp)))
-
-                for value in gb2_list:
-                    if 'up' in spin_channel:
-                        gb2_orb_up.append(value)
-                        gb2_imp_up += value
-                    else:
-                        gb2_orb_down.append(value)
-                        gb2_imp_down += value
-
-                # occupation per orbital
-                den_mat = density_mat_dft[icrsh][spin_channel]
-                for i in range(len(np.real(den_mat)[0, :])):
-                    if 'up' in spin_channel:
-                        occ_orb_up.append(np.real(den_mat)[i, i])
-                        occ_imp_up += np.real(den_mat)[i, i]
-                    else:
-                        occ_orb_down.append(np.real(den_mat)[i, i])
-                        occ_imp_down += np.real(den_mat)[i, i]
-
-            # adding those values to the observable object
-            observables['orb_gb2'][icrsh]['up'].append(gb2_orb_up)
-            observables['orb_gb2'][icrsh]['down'].append(gb2_orb_down)
-
-            observables['imp_gb2'][icrsh]['up'].append(gb2_imp_up)
-            observables['imp_gb2'][icrsh]['down'].append(gb2_imp_down)
-
-            observables['orb_occ'][icrsh]['up'].append(occ_orb_up)
-            observables['orb_occ'][icrsh]['down'].append(occ_orb_down)
-
-            observables['imp_occ'][icrsh]['up'].append(occ_imp_up)
-            observables['imp_occ'][icrsh]['down'].append(occ_imp_down)
-
-
-        # for it 0 we just subtract E_DC from E_DFT
-        observables['E_tot'].append(E_dft - sum(i[0] for i in observables['E_DC']) )
-
-        # write the DFT observables to the files
-        write_obs(observables, sum_k, general_parameters)
-
+    # Read energy from OSZICAR
+    E_dft = toolset.get_dft_energy() if general_parameters['csc'] else 0.0
 
     # now the normal output from each iteration
     observables['iteration'].append(it)
@@ -249,34 +268,30 @@ def calc_obs(observables, general_parameters, solver_parameters, it, solvers, h_
 
     # if density matrix was measured store result in observables
     if solver_parameters["measure_density_matrix"]:
-        for icrsh in range(sum_k.n_inequiv_shells):
-            if icrsh == 0:
-                mpi.report("\nextracting the impurity density matrix")
-            # Extract accumulated density matrix
-            observables["rho"][icrsh].append( solvers[icrsh].density_matrix )
-
-            # Object containing eigensystem of the local Hamiltonian
-            observables["h_loc_diag"][icrsh].append( solvers[icrsh].h_loc_diagonalization )
+        mpi.report("\nextracting the impurity density matrix")
+        # Extract accumulated density matrix
+        density_matrix = [solvers[icrsh].density_matrix for icrsh in range(sum_k.n_inequiv_shells)]
+        # Object containing eigensystem of the local Hamiltonian
+        diag_local_ham = [solvers[icrsh].h_loc_diagonalization for icrsh in range(sum_k.n_inequiv_shells)]
 
     if general_parameters['calc_energies']:
         # dmft interaction energy with E_int = 0.5 * Tr[Sigma * G]
+        if solver_parameters["measure_density_matrix"]:
+            E_int = [trace_rho_op(density_matrix[icrsh], h_int[icrsh], diag_local_ham[icrsh])
+                     for icrsh in range(sum_k.n_inequiv_shells)]
+        else:
+            warning = ( "!-------------------------------------------------------------------------------------------!\n"
+                        "! WARNING: calculating interaction energy using Migdal formula                              !\n"
+                        "! consider turning on measure density matrix to use the more stable trace_rho_op function   !\n"
+                        "!-------------------------------------------------------------------------------------------!" )
+            print(warning)
+            # calc energy for given S and G
+            E_int = [0.5 * np.real((solvers[icrsh].G_iw * solvers[icrsh].Sigma_iw).total_density())
+                     for icrsh in range(sum_k.n_inequiv_shells)]
+
         for icrsh in range(sum_k.n_inequiv_shells):
-            if solver_parameters["measure_density_matrix"]:
-                E_int[icrsh] = trace_rho_op(observables["rho"][icrsh][-1],
-                                        h_int[icrsh],
-                                        observables["h_loc_diag"][icrsh][-1])
-            else:
-                #calc energy for given S and G
-                warning = ( "!-------------------------------------------------------------------------------------------!\n"
-                            "! WARNING: calculating interaction energy using Migdal formula                              !\n"
-                            "! consider turning on measure density matrix to use the more stable trace_rho_op function   !\n"
-                            "!-------------------------------------------------------------------------------------------!" )
-                print(warning)
-
-                E_int[icrsh] = 0.5 * (solvers[icrsh].G_iw* solvers[icrsh].Sigma_iw).total_density()
-
             observables['E_int'][icrsh].append(float(shell_multiplicity[icrsh]*E_int[icrsh]))
-            E_corr_en += shell_multiplicity[icrsh]*E_int[icrsh] - shell_multiplicity[icrsh]*sum_k.dc_energ[sum_k.inequiv_to_corr[icrsh]]
+            E_corr_en += shell_multiplicity[icrsh] * (E_int[icrsh] - sum_k.dc_energ[sum_k.inequiv_to_corr[icrsh]])
 
 
     observables['E_corr_en'].append(E_corr_en)
@@ -286,7 +301,7 @@ def calc_obs(observables, general_parameters, solver_parameters, it, solvers, h_
     observables['E_tot'].append(E_tot)
 
     for icrsh in range(sum_k.n_inequiv_shells):
-        if general_parameters['dc_type'] >= 0:
+        if general_parameters['dc']:
             observables['E_DC'][icrsh].append(shell_multiplicity[icrsh]*sum_k.dc_energ[sum_k.inequiv_to_corr[icrsh]])
         else:
             observables['E_DC'][icrsh].append(0.0)
@@ -300,17 +315,21 @@ def calc_obs(observables, general_parameters, solver_parameters, it, solvers, h_
         occ_orb_up = []
         occ_orb_down = []
 
+        # check if G_tau is set and use it if defined
+        if solvers[icrsh].G_tau:
+            G_tau = solvers[icrsh].G_tau
+        else:
+            G_tau = solvers[icrsh].G_tau_orig
 
         # iterate over all spin channels and add the to up or down
         for spin_channel in sorted(sum_k.gf_struct_solver[icrsh].keys()):
-
             # G(beta/2)
-            mesh_mid = int(len(solvers[icrsh].G_tau[spin_channel].data)/2)
+            mesh_mid = int(len(G_tau[spin_channel].data)/2)
             # since G(tau) has always 10001 values we are sampling +-10 values
             # hard coded, for beta=40 this corresponds to approx +-0.05
             samp = 10
             # we are sampling a few values around G(beta/2+-0.05)
-            gg = solvers[icrsh].G_tau[spin_channel].data[mesh_mid-samp:mesh_mid+samp]
+            gg = G_tau[spin_channel].data[mesh_mid-samp:mesh_mid+samp]
             # taking the diagonal elements of the sum of the G(beta/2) matrices
             gb2_list = np.diagonal(np.real(sum(gg)/float(2*samp)))
 
@@ -366,14 +385,10 @@ def write_obs(observables, sum_k, general_parameters):
 
     """
 
-    n_inequiv_shells = sum_k.n_inequiv_shells
-    n_orbitals = [len(observables['orb_gb2'][icrsh]['up'][0]) for icrsh in range(n_inequiv_shells)]
+    n_orbitals = [sum_k.corr_shells[sum_k.inequiv_to_corr[iineq]]['dim']
+                  for iineq in range(sum_k.n_inequiv_shells)]
 
-    # Prints header in first iteration, using len() to not remove DFT obs writing
-    if len(observables['iteration']) == 1:
-        prepare_obs_files(general_parameters, n_inequiv_shells, n_orbitals)
-
-    for icrsh in range(n_inequiv_shells):
+    for icrsh in range(sum_k.n_inequiv_shells):
         if general_parameters['magnetic']:
             for spin in ('up', 'down'):
                 line = '{:3d} | '.format(observables['iteration'][-1])

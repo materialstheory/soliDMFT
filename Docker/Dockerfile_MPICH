@@ -75,7 +75,7 @@ ENV OMP_NUM_THREADS=1
 
 # if you want more sophisticated jupyter installation uncomment this
 # make sure that jupyter lab is installed
- RUN pip install --no-cache-dir future npm jupyter ipywidgets jupyterlab nodejs pandas shapely descartes ipympl pymatgen==2018.12.12
+ RUN pip install --no-cache-dir future npm jupyter ipywidgets jupyterlab nodejs pandas shapely descartes ipympl pymatgen==2018.12.12 RISE pytest
 #
 RUN apt-get update && \
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends texlive dvipng texlive-latex-extra texlive-fonts-recommended nodejs npm python-backports.functools-lru-cache python-tk \

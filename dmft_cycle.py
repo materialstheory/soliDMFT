@@ -25,7 +25,8 @@ from pytriqs.gf.descriptors import Fourier
 
 
 # own modules
-from observables import calc_dft_kin_en, calc_obs, calc_bandcorr_man, write_obs
+from observables import (calc_dft_kin_en, add_dmft_observables, calc_bandcorr_man, write_obs,
+                         add_dft_values_as_zeroth_iteration, write_header_to_file)
 import toolset
 
 def _calculate_double_counting(sum_k, density_matrix, general_parameters, advanced_parameters):
@@ -89,6 +90,80 @@ def _calculate_double_counting(sum_k, density_matrix, general_parameters, advanc
             mpi.report('DC energy for shell {} = {}'.format(icrsh, energy_per_shell))
 
     return sum_k
+
+
+def _set_loaded_sigma(sum_k, loaded_sigma, loaded_dc_imp):
+    """
+    Adjusts for the Hartree shift when loading a self energy Sigma_iw from a
+    previous calculation that was run with a different U, J or double counting.
+
+    Parameters
+    ----------
+    sum_k : SumkDFT object
+        Sumk object with the information about the correct block structure
+    loaded_sigma : list of BlockGf (Green's function) objects
+        List of Sigmas loaded from the previous calculation
+    loaded_dc_imp : list of dicts
+        List of dicts containing the loaded DC. Used to adjust the Hartree shift.
+
+    Raises
+    ------
+    ValueError
+        Raised if the block structure between the loaded and the Sumk DC_imp
+        does not agree.
+
+    Returns
+    -------
+    start_sigma : list of BlockGf (Green's function) objects
+        List of Sigmas, loaded Sigma adjusted for the new Hartree term
+
+    """
+    # Compares loaded and new double counting
+    if len(loaded_dc_imp) != len(sum_k.dc_imp):
+        raise ValueError('Loaded double counting has a different number of '
+                         + 'correlated shells than current calculation.')
+
+    has_double_counting_changed = False
+    for loaded_dc_shell, calc_dc_shell in zip(loaded_dc_imp, sum_k.dc_imp):
+        if sorted(loaded_dc_shell.keys()) != sorted(calc_dc_shell.keys()):
+            raise ValueError('Loaded double counting has a different block '
+                             + 'structure than current calculation.')
+
+        for channel in loaded_dc_shell.keys():
+            if not np.allclose(loaded_dc_shell[channel], calc_dc_shell[channel],
+                               atol=1e-4, rtol=0):
+                has_double_counting_changed = True
+                break
+
+    # Sets initial Sigma
+    start_sigma = loaded_sigma
+
+    if not has_double_counting_changed:
+        print('DC remained the same. Using loaded Sigma as initial Sigma.')
+        return start_sigma
+
+    # Uses the SumkDFT add_dc routine to correctly substract the DC shift
+    sum_k.put_Sigma(start_sigma)
+    calculated_dc_imp = sum_k.dc_imp
+    sum_k.dc_imp = [{channel: np.array(loaded_dc_shell[channel]) - np.array(calc_dc_shell[channel])
+                     for channel in loaded_dc_shell}
+                    for calc_dc_shell, loaded_dc_shell in zip(sum_k.dc_imp, loaded_dc_imp)]
+    start_sigma = sum_k.add_dc()
+    start_sigma = toolset.sumk_sigma_to_solver_struct(sum_k, start_sigma)
+
+    # Prints information on correction of Hartree shift
+    first_block = sorted(key for key, _ in loaded_sigma[0])[0]
+    print('DC changed, initial Sigma is the loaded Sigma with corrected Hartree shift:')
+    print('    Sigma for imp0, block "{}", orbital 0 '.format(first_block)
+          + 'shifted from {:.3f} eV '.format(loaded_sigma[0][first_block].data[0, 0, 0].real)
+          + 'to {:.3f} eV'.format(start_sigma[0][first_block].data[0, 0, 0].real))
+
+    # Cleans up
+    sum_k.dc_imp = calculated_dc_imp
+    [sigma_iw.zero() for sigma_iw in sum_k.Sigma_imp_iw]
+
+    return start_sigma
+
 
 def _extract_U_J_list(param_name, n_inequiv_shells, general_parameters):
     """
@@ -326,11 +401,9 @@ def dmft_cycle(general_parameters, solver_parameters, advanced_parameters, obser
     deg_shells = mpi.bcast(deg_shells)
     shell_multiplicity = mpi.bcast(shell_multiplicity)
 
-    # if we are not doing a CSC calculation we need to have a DFT mu value
-    # if CSC we are using the VASP converter which subtracts mu already
-    # if we are at iteration offset 0 we should determine it anyway for safety!
-    if (dft_mu == 0.0 and not general_parameters['csc']) or iteration_offset == 0:
-        dft_mu = sum_k.calc_mu(precision=general_parameters['prec_mu'])
+    # determine true dft_mu
+    dft_mu = sum_k.calc_mu(precision=general_parameters['prec_mu'])
+
 
     # determine block structure for GF and Hyb function
     if det_blocks and not general_parameters['load_sigma']:
@@ -358,14 +431,25 @@ def dmft_cycle(general_parameters, solver_parameters, advanced_parameters, obser
         sum_k.read_input_from_hdf(subgrp='DMFT_input', things_to_read=['block_structure', 'rot_mat'])
         sum_k.deg_shells = deg_shells
 
+    # Initializes empty Sigma for calculation of DFT density
+    zero_Sigma_iw = [sum_k.block_structure.create_gf(ish=iineq, beta=general_parameters['beta'])
+                     for iineq in range(sum_k.n_inequiv_shells)]
+    sum_k.put_Sigma(zero_Sigma_iw)
     toolset.print_block_sym(sum_k)
+
+    # extract free lattice greens function
+    G_loc_all_dft = sum_k.extract_G_loc(with_Sigma=False, mu=dft_mu)
+    density_mat_dft = [G_loc_all_dft[iineq].density() for iineq in range(sum_k.n_inequiv_shells)]
+    for iineq in range(sum_k.n_inequiv_shells):
+        density_shell_dft = G_loc_all_dft[iineq].total_density()
+        mpi.report('total density for imp {} from DFT: {:10.6f}'.format(iineq, np.real(density_shell_dft)))
 
     # for CSC calculations this does not work
     if general_parameters['magnetic'] and not general_parameters['csc']:
         sum_k.SP = 1
     # if we do AFM calculation we can use symmetry to copy self-energies from
     # one imp to another by exchanging up/down channels for speed up and accuracy
-    afm_mapping = []
+    general_parameters['afm_mapping'] = []
     if mpi.is_master_node():
         if (general_parameters['magnetic']
                 and len(general_parameters['magmom']) == sum_k.n_inequiv_shells
@@ -375,7 +459,7 @@ def dmft_cycle(general_parameters, solver_parameters, advanced_parameters, obser
             # find equal or opposite spin imps, where we use the magmom array to
             # identity those with equal numbers or opposite
             # [copy Yes/False, from where, switch up/down channel]
-            afm_mapping.append([False, 0, False])
+            general_parameters['afm_mapping'].append([False, 0, False])
 
             abs_moms = map(abs, general_parameters['magmom'])
 
@@ -396,30 +480,30 @@ def dmft_cycle(general_parameters, solver_parameters, advanced_parameters, obser
                         switch = False
                         copy = False
 
-                    afm_mapping.append([copy, source, switch])
+                    general_parameters['afm_mapping'].append([copy, source, switch])
                 else:
-                    afm_mapping.append([False, icrsh, False])
+                    general_parameters['afm_mapping'].append([False, icrsh, False])
 
 
             print('AFM calculation selected, mapping self energies as follows:')
             print('imp  [copy sigma, source imp, switch up/down]')
             print('---------------------------------------------')
-            for i, elem in enumerate(afm_mapping):
+            for i, elem in enumerate(general_parameters['afm_mapping']):
                 print(str(i)+' ', elem)
             print('')
 
-            archive['DMFT_input']['afm_mapping'] = afm_mapping
+            archive['DMFT_input']['afm_mapping'] = general_parameters['afm_mapping']
 
         # else if mapping is already in h5 archive
         elif 'afm_mapping' in archive['DMFT_input']:
-            afm_mapping = archive['DMFT_input']['afm_mapping']
+            general_parameters['afm_mapping'] = archive['DMFT_input']['afm_mapping']
 
         # if anything did not work set afm_order false
         else:
             general_parameters['afm_order'] = False
 
     general_parameters['afm_order'] = mpi.bcast(general_parameters['afm_order'])
-    afm_mapping = mpi.bcast(afm_mapping)
+    general_parameters['afm_mapping'] = mpi.bcast(general_parameters['afm_mapping'])
 
     # Initializes the solvers
     solvers = []
@@ -467,14 +551,26 @@ def dmft_cycle(general_parameters, solver_parameters, advanced_parameters, obser
             # and the shell_multiplicity
             archive['DMFT_input']['shell_multiplicity'] = shell_multiplicity
 
-            start_sigma = []
+            start_sigma = None
             # load now sigma from other calculation if wanted
             if general_parameters['load_sigma'] and general_parameters['previous_file'] == 'none':
-                start_sigma, sum_k.dc_imp, sum_k.dc_energ = toolset.load_sigma_from_h5(general_parameters['path_to_sigma'], general_parameters['load_sigma_iter'])
+                (loaded_sigma, loaded_dc_imp,
+                 _, loaded_density_matrix) = toolset.load_sigma_from_h5(general_parameters['path_to_sigma'],
+                                                                        general_parameters['load_sigma_iter'])
+
+                # Recalculate double counting in case U, J or DC formula changed
+                if general_parameters['dc_dmft']:
+                    sum_k = _calculate_double_counting(sum_k, loaded_density_matrix,
+                                                       general_parameters, advanced_parameters)
+                else:
+                    sum_k = _calculate_double_counting(sum_k, density_mat_dft,
+                                                       general_parameters, advanced_parameters)
+
+                start_sigma = _set_loaded_sigma(sum_k, loaded_sigma, loaded_dc_imp)
 
             # if this is a series of calculation load previous sigma
             elif general_parameters['previous_file'] != 'none':
-                start_sigma, sum_k.dc_imp, sum_k.dc_energ = toolset.load_sigma_from_h5(general_parameters['previous_file'], -1)
+                start_sigma, sum_k.dc_imp, sum_k.dc_energ, _ = toolset.load_sigma_from_h5(general_parameters['previous_file'], -1)
 
             # load everything now to the solver
             if start_sigma:
@@ -502,26 +598,11 @@ def dmft_cycle(general_parameters, solver_parameters, advanced_parameters, obser
         # determine chemical potential
         sum_k.calc_mu(precision=general_parameters['prec_mu'])
 
-    #############################
-    # extract G local
-    G_loc_all = sum_k.extract_G_loc()
-    #############################
-
     if mpi.is_master_node():
         # print other system information
         print('\nInverse temperature beta = {}'.format(general_parameters['beta']))
         if solver_parameters['measure_G_l']:
             print('\nSampling G(iw) in Legendre space with {} coefficients'.format(general_parameters['n_LegCoeff']))
-
-    # extract free lattice greens function
-    G_loc_all_dft = sum_k.extract_G_loc(with_Sigma=False, mu=dft_mu)
-    density_shell_dft = np.zeros(sum_k.n_inequiv_shells)
-    density_mat_dft = []
-    for icrsh in range(sum_k.n_inequiv_shells):
-        density_mat_dft.append([])
-        density_mat_dft[icrsh] = G_loc_all_dft[icrsh].density()
-        density_shell_dft[icrsh] = G_loc_all_dft[icrsh].total_density()
-        mpi.report('total density for imp '+str(icrsh)+' from DFT: '+str(density_shell_dft[icrsh]))
 
     # Generates a rotation matrix to change the basis
     if (general_parameters['set_rot'] != 'none' and iteration_offset == 0
@@ -570,13 +651,16 @@ def dmft_cycle(general_parameters, solver_parameters, advanced_parameters, obser
 
         # set DC as Sigma and extract the new Gloc with DC potential
         sum_k.put_Sigma([solvers[icrsh].Sigma_iw for icrsh in range(sum_k.n_inequiv_shells)])
-        G_loc_all = sum_k.extract_G_loc()
 
     if ((general_parameters['load_sigma'] or general_parameters['previous_file'] != 'none')
             and iteration_offset == 0):
         sum_k.calc_mu(precision=general_parameters['prec_mu'])
-        G_loc_all = sum_k.extract_G_loc()
 
+    # setup of measurement of chi(SzSz(tau) if requested
+    if general_parameters['measure_chi_SzSz']:
+        solver_parameters, Sz_list = toolset.chi_SzSz_setup(sum_k, general_parameters, solver_parameters)
+    else:
+        Sz_list = None
     # if CSC we use the first and per params for the number of iterations
     if general_parameters['csc'] and iteration_offset == 0:
         # for CSC calculations converge first to a better Sigma
@@ -600,10 +684,16 @@ def dmft_cycle(general_parameters, solver_parameters, advanced_parameters, obser
     else:
         E_kin_dft = None
 
-    converged, observables, sum_k = _dmft_steps(iteration_offset, n_iter, sum_k, solvers, G_loc_all,
+    if mpi.is_master_node() and iteration_offset == 0:
+        write_header_to_file(general_parameters, sum_k)
+        observables = add_dft_values_as_zeroth_iteration(observables, general_parameters, dft_mu, sum_k,
+                                                         G_loc_all_dft, density_mat_dft, shell_multiplicity)
+        write_obs(observables, sum_k, general_parameters)
+
+    converged, observables, sum_k = _dmft_steps(iteration_offset, n_iter, sum_k, solvers,
                                                 general_parameters, solver_parameters, advanced_parameters,
-                                                afm_mapping, h_int, archive, shell_multiplicity, E_kin_dft,
-                                                observables, dft_mu, G_loc_all_dft, density_mat_dft)
+                                                h_int, archive, shell_multiplicity, E_kin_dft,
+                                                observables, Sz_list)
 
     # for one-shot calculations, we can use the updated GAMMA file for postprocessing
     if not general_parameters['csc'] and general_parameters['oneshot_postproc_gamma_file']:
@@ -628,8 +718,10 @@ def dmft_cycle(general_parameters, solver_parameters, advanced_parameters, obser
 
     return observables
 
-def _dmft_steps(iteration_offset, n_iter, sum_k, solvers, G_loc_all, general_parameters, solver_parameters, advanced_parameters,
-                afm_mapping, h_int, archive, shell_multiplicity, E_kin_dft, observables, dft_mu, G_loc_all_dft, density_mat_dft):
+def _dmft_steps(iteration_offset, n_iter, sum_k, solvers,
+                general_parameters, solver_parameters, advanced_parameters,
+                h_int, archive, shell_multiplicity, E_kin_dft,
+                observables, Sz_list):
     """
     Contains the actual dmft steps when all the preparation is done
     """
@@ -653,12 +745,18 @@ def _dmft_steps(iteration_offset, n_iter, sum_k, solvers, G_loc_all, general_par
         for icrsh in range(sum_k.n_inequiv_shells):
             sum_k.symm_deg_gf(solvers[icrsh].Sigma_iw, orb=icrsh)
 
+        # Extracts G local
+        G_loc_all = sum_k.extract_G_loc()
+
+        # Copies Sigma before Solver run for mixing later
+        Sigma_iw_previous = [solvers[iineq].Sigma_iw.copy() for iineq in range(sum_k.n_inequiv_shells)]
+
         # looping over inequiv shells and solving for each site seperately
         for icrsh in range(sum_k.n_inequiv_shells):
             # copy the block of G_loc into the corresponding instance of the impurity solver
             solvers[icrsh].G_iw << G_loc_all[icrsh]
 
-            density_shell_pre[icrsh] = solvers[icrsh].G_iw.total_density()
+            density_shell_pre[icrsh] = np.real(solvers[icrsh].G_iw.total_density())
             mpi.report('\n *** Correlated Shell type #{:3d} : '.format(icrsh)
                        + 'Total charge of impurity problem = {:.6f}'.format(density_shell_pre[icrsh]))
             density_mat_pre[icrsh] = solvers[icrsh].G_iw.density()
@@ -669,6 +767,7 @@ def _dmft_steps(iteration_offset, n_iter, sum_k, solvers, G_loc_all, general_par
 
             # dyson equation to extract G0_iw, using Hermitian symmetry
             solvers[icrsh].G0_iw << inverse(solvers[icrsh].Sigma_iw + inverse(solvers[icrsh].G_iw))
+
             solvers[icrsh].G0_iw << make_hermitian(solvers[icrsh].G0_iw)
             sum_k.symm_deg_gf(solvers[icrsh].G0_iw, orb=icrsh)
 
@@ -688,6 +787,7 @@ def _dmft_steps(iteration_offset, n_iter, sum_k, solvers, G_loc_all, general_par
             # we will call it G_tau_orig to store original G_tau
             solvers[icrsh].G_tau_orig = BlockGf(name_list=sum_k.gf_struct_solver[icrsh].keys(),
                                                block_list=glist_tau, make_copies=True)
+
             if solver_parameters['measure_G_l'] or general_parameters['legendre_fit']:
                 solvers[icrsh].G_l_man = BlockGf(name_list=sum_k.gf_struct_solver[icrsh].keys(),
                                                  block_list=glist_l, make_copies=True)
@@ -697,11 +797,19 @@ def _dmft_steps(iteration_offset, n_iter, sum_k, solvers, G_loc_all, general_par
                 archive['DMFT_input']['solver'].create_group('it_'+str(it))
                 archive['DMFT_input']['solver']['it_'+str(it)]['S_'+str(icrsh)] = solvers[icrsh]
 
+            # store DMFT input directly in last_iter
+            if mpi.is_master_node():
+                archive['DMFT_results']['last_iter']['G0_iw'+str(icrsh)] = solvers[icrsh].G0_iw
+
+            # setup of measurement of chi(SzSz(tau) if requested
+            if general_parameters['measure_chi_SzSz']:
+                solver_parameters['measure_O_tau'] = (Sz_list[icrsh],Sz_list[icrsh])
+
             # if we do a AFM calculation we can use the init magnetic moments to
             # copy the self energy instead of solving it explicitly
-            if general_parameters['afm_order'] and afm_mapping[icrsh][0]:
-                imp_source = afm_mapping[icrsh][1]
-                invert_spin = afm_mapping[icrsh][2]
+            if general_parameters['afm_order'] and general_parameters['afm_mapping'][icrsh][0]:
+                imp_source = general_parameters['afm_mapping'][icrsh][1]
+                invert_spin = general_parameters['afm_mapping'][icrsh][2]
                 mpi.report('\ncopying the self-energy for shell {} from shell {}'.format(icrsh, imp_source))
                 mpi.report('inverting spin channels: '+str(invert_spin))
 
@@ -716,7 +824,7 @@ def _dmft_steps(iteration_offset, n_iter, sum_k, solvers, G_loc_all, general_par
                         solvers[icrsh].G_tau_orig[spin_channel] << solvers[imp_source].G_tau_orig[target_channel]
                         solvers[icrsh].G_iw[spin_channel] << solvers[imp_source].G_iw[target_channel]
                         solvers[icrsh].G0_iw[spin_channel] << solvers[imp_source].G0_iw[target_channel]
-                        if solver_parameters['measure_G_l']:
+                        if solver_parameters['measure_G_l'] or general_parameters['legendre_fit']:
                             solvers[icrsh].G_l_man[spin_channel] << solvers[imp_source].G_l_man[target_channel]
 
                 else:
@@ -728,7 +836,6 @@ def _dmft_steps(iteration_offset, n_iter, sum_k, solvers, G_loc_all, general_par
                         solvers[icrsh].G_l_man << solvers[imp_source].G_l_man
 
             else:
-
                 ####################################################################
                 # Solve the impurity problem for this shell
                 mpi.report('\nSolving the impurity problem for shell {} ...'.format(icrsh))
@@ -741,14 +848,13 @@ def _dmft_steps(iteration_offset, n_iter, sum_k, solvers, G_loc_all, general_par
                 if solver_parameters['measure_G_l']:
                     solvers[icrsh].Sigma_iw_orig = solvers[icrsh].Sigma_iw.copy()
                     solvers[icrsh].G_iw_from_leg = solvers[icrsh].G_iw.copy()
-                    solvers[icrsh].G_tau_orig = solvers[icrsh].G_tau.copy()
                     solvers[icrsh].G_l_man << solvers[icrsh].G_l
                     if mpi.is_master_node():
                         for i, g in solvers[icrsh].G_l:
                             g.enforce_discontinuity(np.identity(g.target_shape[0]))
                             solvers[icrsh].G_iw[i].set_from_legendre(g)
                             # update G_tau as well:
-                            solvers[icrsh].G_tau[i] << Fourier(solvers[icrsh].G_iw[i])
+                            solvers[icrsh].G_tau_orig[i] << Fourier(solvers[icrsh].G_iw[i])
                         # Symmetrize
                         solvers[icrsh].G_iw << make_hermitian(solvers[icrsh].G_iw)
                         # set Sigma and G_iw from G_l
@@ -758,7 +864,7 @@ def _dmft_steps(iteration_offset, n_iter, sum_k, solvers, G_loc_all, general_par
                     solvers[icrsh].Sigma_iw_orig << mpi.bcast(solvers[icrsh].Sigma_iw_orig)
                     solvers[icrsh].Sigma_iw << mpi.bcast(solvers[icrsh].Sigma_iw)
                     solvers[icrsh].G_iw << mpi.bcast(solvers[icrsh].G_iw)
-                    solvers[icrsh].G_tau << mpi.bcast(solvers[icrsh].G_tau)
+                    solvers[icrsh].G_tau_orig << mpi.bcast(solvers[icrsh].G_tau_orig)
                 else:
                     solvers[icrsh].G_tau_orig << solvers[icrsh].G_tau
                     solvers[icrsh].G_iw << make_hermitian(solvers[icrsh].G_iw)
@@ -777,7 +883,7 @@ def _dmft_steps(iteration_offset, n_iter, sum_k, solvers, G_loc_all, general_par
                             for i, g in solvers[icrsh].G_l_man:
                                 solvers[icrsh].G_iw[i].set_from_legendre(g)
                                 # update G_tau as well:
-                                solvers[icrsh].G_tau[i] << Fourier(solvers[icrsh].G_iw[i])
+                                solvers[icrsh].G_tau_orig[i] << Fourier(solvers[icrsh].G_iw[i])
                             # Symmetrize
                             solvers[icrsh].G_iw << make_hermitian(solvers[icrsh].G_iw)
                             # set Sigma and G_iw from G_l
@@ -788,11 +894,11 @@ def _dmft_steps(iteration_offset, n_iter, sum_k, solvers, G_loc_all, general_par
                         solvers[icrsh].Sigma_iw << mpi.bcast(solvers[icrsh].Sigma_iw)
                         solvers[icrsh].G_l_man << mpi.bcast(solvers[icrsh].G_l_man)
                         solvers[icrsh].G_iw << mpi.bcast(solvers[icrsh].G_iw)
-                        solvers[icrsh].G_tau << mpi.bcast(solvers[icrsh].G_tau)
+                        solvers[icrsh].G_tau_orig << mpi.bcast(solvers[icrsh].G_tau_orig)
 
 
             # some printout of the obtained density matrices and some basic checks
-            density_shell[icrsh] = solvers[icrsh].G_iw.total_density()
+            density_shell[icrsh] = np.real(solvers[icrsh].G_iw.total_density())
             density_tot += density_shell[icrsh]*shell_multiplicity[icrsh]
             density_mat[icrsh] = solvers[icrsh].G_iw.density()
             if mpi.is_master_node():
@@ -800,21 +906,16 @@ def _dmft_steps(iteration_offset, n_iter, sum_k, solvers, G_loc_all, general_par
                 print('Total charge convergency of impurity problem: {:7.5f}'.format(density_shell[icrsh]-density_shell_pre[icrsh]))
                 print('\nDensity matrix:')
                 for key, value in density_mat[icrsh].iteritems():
+                    value = np.real(value)
                     print(key)
-                    print(np.real(value))
-                    eige, _ = np.linalg.eigh(value)
-                    print('eigenvalues: ', eige)
+                    print(value)
+                    eigenvalues = np.linalg.eigvalsh(value)
+                    print('eigenvalues: {}'.format(eigenvalues))
                     # check for large off-diagonal elements and write out a warning
-                    size = len(np.real(value)[0])
-                    pr_warning = False
-                    for i in range(size):
-                        for j in range(size):
-                            if i != j and np.real(value)[i, j] >= 0.1:
-                                pr_warning = True
-                    if pr_warning:
+                    if np.max(np.abs(value - np.diag(np.diag(value)))) >= 0.1:
                         print('\n!!! WARNING !!!')
                         print('!!! large off diagonal elements in density matrix detected! I hope you know what you are doing !!!')
-                        print('\n!!! WARNING !!!')
+                        print('!!! WARNING !!!\n')
 
         # Done with loop over impurities
 
@@ -825,22 +926,18 @@ def _dmft_steps(iteration_offset, n_iter, sum_k, solvers, G_loc_all, general_par
 
         # mixing Sigma
         if mpi.is_master_node():
-            if it > 1:
-                print('mixing sigma with previous iteration by factor '+str(general_parameters['sigma_mix'])+'\n')
-                for icrsh in range(sum_k.n_inequiv_shells):
-                    solvers[icrsh].Sigma_iw << (general_parameters['sigma_mix'] * solvers[icrsh].Sigma_iw
-                                                + (1-general_parameters['sigma_mix']) *  archive['DMFT_results']['last_iter']['Sigma_iw_'+str(icrsh)])
-                    solvers[icrsh].G_iw << (general_parameters['sigma_mix'] * solvers[icrsh].G_iw
-                                            + (1-general_parameters['sigma_mix'])*archive['DMFT_results']['last_iter']['Gimp_iw_'+str(icrsh)])
+            print('mixing sigma with previous iteration by factor {:.3f}\n'.format(general_parameters['sigma_mix']))
+            for icrsh in range(sum_k.n_inequiv_shells):
+                solvers[icrsh].Sigma_iw << (general_parameters['sigma_mix'] * solvers[icrsh].Sigma_iw
+                                            + (1-general_parameters['sigma_mix']) * Sigma_iw_previous[icrsh])
 
         for icrsh in range(sum_k.n_inequiv_shells):
             solvers[icrsh].Sigma_iw << mpi.bcast(solvers[icrsh].Sigma_iw)
-            solvers[icrsh].G_iw << mpi.bcast(solvers[icrsh].G_iw)
         mpi.barrier()
 
         # calculate new DC
         if general_parameters['dc'] and general_parameters['dc_dmft']:
-            sum_k = _calculate_double_counting(sum_k, [solver.G_iw.density() for solver in solvers],
+            sum_k = _calculate_double_counting(sum_k, density_mat,
                                                general_parameters, advanced_parameters)
 
         # symmetrise Sigma
@@ -852,14 +949,13 @@ def _dmft_steps(iteration_offset, n_iter, sum_k, solvers, G_loc_all, general_par
 
         if general_parameters['fixed_mu_value'] != 'none':
             sum_k.set_mu(general_parameters['fixed_mu_value'])
+            # TODO: put previous_mu above set_mu to make it consistent with case of no fixed mu
             previous_mu = sum_k.chemical_potential
             mpi.report('+++ Keeping the chemical potential fixed at {} eV +++'.format(general_parameters['fixed_mu_value']))
         else:
             # saving previous mu for writing to observables file
             previous_mu = sum_k.chemical_potential
             sum_k.calc_mu(precision=general_parameters['prec_mu'])
-
-        G_loc_all = sum_k.extract_G_loc()
 
         # saving results to h5 archive
         if mpi.is_master_node():
@@ -870,14 +966,28 @@ def _dmft_steps(iteration_offset, n_iter, sum_k, solvers, G_loc_all, general_par
             archive['DMFT_results']['last_iter']['dens_mat_pre'] = density_mat_pre
             archive['DMFT_results']['last_iter']['dens_mat_post'] = density_mat
             for icrsh in range(sum_k.n_inequiv_shells):
-                archive['DMFT_results']['last_iter']['G0_iw'+str(icrsh)] = solvers[icrsh].G0_iw
+
+                # check first if G_tau was set and if not the info is stored in _orig
+                if solvers[icrsh].G_tau:
+                    archive['DMFT_results']['last_iter']['Gimp_tau_'+str(icrsh)] = solvers[icrsh].G_tau
+                    # if legendre was set, that we have both now!
+                    if solver_parameters['measure_G_l'] or general_parameters['legendre_fit']:
+                        archive['DMFT_results']['last_iter']['Gimp_tau_orig'+str(icrsh)] = solvers[icrsh].G_tau_orig
+                else:
+                    archive['DMFT_results']['last_iter']['Gimp_tau_'+str(icrsh)] = solvers[icrsh].G_tau_orig
+
                 archive['DMFT_results']['last_iter']['Delta_tau'+str(icrsh)] = solvers[icrsh].Delta_tau
-                archive['DMFT_results']['last_iter']['Gimp_tau_'+str(icrsh)] = solvers[icrsh].G_tau
                 if solver_parameters['measure_G_l'] or general_parameters['legendre_fit']:
                     archive['DMFT_results']['last_iter']['Gimp_l_'+str(icrsh)] = solvers[icrsh].G_l_man
-                    archive['DMFT_results']['last_iter']['Gimp_tau_orig_'+str(icrsh)] = solvers[icrsh].G_tau_orig
+
+                if solver_parameters['measure_pert_order']:
+                    archive['DMFT_results']['last_iter']['pert_order_imp_'+str(icrsh)] = solvers[icrsh].perturbation_order
+                    archive['DMFT_results']['last_iter']['pert_order_total_imp_'+str(icrsh)] = solvers[icrsh].perturbation_order_total
                 archive['DMFT_results']['last_iter']['Gimp_iw_'+str(icrsh)] = solvers[icrsh].G_iw
                 archive['DMFT_results']['last_iter']['Sigma_iw_'+str(icrsh)] = solvers[icrsh].Sigma_iw
+
+                if general_parameters['measure_chi_SzSz']:
+                    archive['DMFT_results']['last_iter']['O_tau_'+str(icrsh)] = solvers[icrsh].O_tau
 
             # save to h5 archive every h5_save_freq iterations
             if it % general_parameters['h5_save_freq'] == 0:
@@ -890,12 +1000,26 @@ def _dmft_steps(iteration_offset, n_iter, sum_k, solvers, G_loc_all, general_par
                 for icrsh in range(sum_k.n_inequiv_shells):
                     archive['DMFT_results']['it_'+str(it)]['G0_iw'+str(icrsh)] = solvers[icrsh].G0_iw
                     archive['DMFT_results']['last_iter']['Delta_tau'+str(icrsh)] = solvers[icrsh].Delta_tau
-                    archive['DMFT_results']['it_'+str(it)]['Gimp_tau_'+str(icrsh)] = solvers[icrsh].G_tau
+                    # check if G_tau was set
+                    if solvers[icrsh].G_tau:
+                        archive['DMFT_results']['it_'+str(it)]['Gimp_tau_'+str(icrsh)] = solvers[icrsh].G_tau
+                        # if legendre was set, that we have both now!
+                        if solver_parameters['measure_G_l'] or general_parameters['legendre_fit']:
+                            archive['DMFT_results']['it_'+str(it)]['Gimp_tau_orig'+str(icrsh)] = solvers[icrsh].G_tau_orig
+                    else:
+                        archive['DMFT_results']['it_'+str(it)]['Gimp_tau_'+str(icrsh)] = solvers[icrsh].G_tau_orig
+
                     if solver_parameters['measure_G_l'] or general_parameters['legendre_fit']:
                         archive['DMFT_results']['it_'+str(it)]['Gimp_l_'+str(icrsh)] = solvers[icrsh].G_l_man
-                        archive['DMFT_results']['it_'+str(it)]['Gimp_tau_orig_'+str(icrsh)] = solvers[icrsh].G_tau_orig
                     archive['DMFT_results']['it_'+str(it)]['Gimp_iw_'+str(icrsh)] = solvers[icrsh].G_iw
                     archive['DMFT_results']['it_'+str(it)]['Sigma_iw_'+str(icrsh)] = solvers[icrsh].Sigma_iw
+
+                    if solver_parameters['measure_pert_order']:
+                        archive['DMFT_results']['it_'+str(it)]['pert_order_imp_'+str(icrsh)] = solvers[icrsh].perturbation_order
+                        archive['DMFT_results']['it_'+str(it)]['pert_order_total_imp_'+str(icrsh)] = solvers[icrsh].perturbation_order_total
+
+                    if general_parameters['measure_chi_SzSz']:
+                        archive['DMFT_results']['it_'+str(it)]['O_tau_'+str(icrsh)] = solvers[icrsh].O_tau
 
         mpi.barrier()
 
@@ -913,20 +1037,17 @@ def _dmft_steps(iteration_offset, n_iter, sum_k, solvers, G_loc_all, general_par
         # calculate observables and write them to file
         if mpi.is_master_node():
             print('\n *** calculation of observables ***')
-            observables = calc_obs(observables,
-                                   general_parameters,
-                                   solver_parameters,
-                                   it,
-                                   solvers,
-                                   h_int,
-                                   dft_mu,
-                                   previous_mu,
-                                   sum_k,
-                                   G_loc_all_dft,
-                                   density_mat_dft,
-                                   density_mat,
-                                   shell_multiplicity,
-                                   E_bandcorr)
+            observables = add_dmft_observables(observables,
+                                               general_parameters,
+                                               solver_parameters,
+                                               it,
+                                               solvers,
+                                               h_int,
+                                               previous_mu,
+                                               sum_k,
+                                               density_mat,
+                                               shell_multiplicity,
+                                               E_bandcorr)
 
             write_obs(observables, sum_k, general_parameters)
 
@@ -981,7 +1102,11 @@ def _dmft_steps(iteration_offset, n_iter, sum_k, solvers, G_loc_all, general_par
             conv_file.write('std_dev occ for each impurity \n')
         if it >= general_parameters['occ_conv_it'] and general_parameters['occ_conv_crit'] > 0.0:
             if mpi.is_master_node():
-                converged, std_dev = toolset.check_convergence(sum_k, general_parameters, observables)
+                # if convergency criteria was already reached dont overwrite it!
+                if converged:
+                    dummy, std_dev = toolset.check_convergence(sum_k, general_parameters, observables)
+                else:
+                    converged, std_dev = toolset.check_convergence(sum_k, general_parameters, observables)
                 conv_file.write('{:3d}'.format(it))
                 for icrsh in range(sum_k.n_inequiv_shells):
                     conv_file.write('{:10.6f}'.format(std_dev[icrsh]))
@@ -1008,9 +1133,8 @@ def _dmft_steps(iteration_offset, n_iter, sum_k, solvers, G_loc_all, general_par
         if it == (iteration_offset + n_iter):
             mpi.report('all requested iterations finished')
             mpi.report('#'*80)
-
-        # check also if the global number of iterations is reached
-        if it == general_parameters['n_iter_dmft']:
+        # check also if the global number of iterations is reached, important for CSC
+        elif it == general_parameters['prev_iterations'] + general_parameters['n_iter_dmft']:
             mpi.report('all requested iterations finished')
             mpi.report('#'*80)
             break

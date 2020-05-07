@@ -37,6 +37,8 @@ import <script_name>
 <script_name>.main(h5_name (, iteration))
 ```
 If you run it from within another python program, the `main()` method not only writes the results back but also returns them directly.
+If you run it from the terminal, you can use wildcards (like `*`) in the h5 name, where this path with wildcards has to be surrounded by a single inverted comma `'`.
+Then, the program will loop over all possible paths, with a parallelization of up to 8 maxent runs at the same time.
 In both ways, if you leave out the iteration, the script will read and write from the group 'DMFT\_results/last\_iter'.
 
 # Notes

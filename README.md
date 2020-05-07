@@ -212,14 +212,34 @@ what the software does (left side is INCAR, right side is resulting in the LOCPR
 * z2 -> xy
 
 ```
-LOCPROJ = 2 : dxz : Pr 1
-LOCPROJ = 2 : dx2-y2 : Pr 1
-LOCPROJ = 2 : dz2 : Pr 1
+LOCPROJ = 2 : dxz : Pr 
+LOCPROJ = 2 : dx2-y2 : Pr
+LOCPROJ = 2 : dz2 : Pr 
 ```
 However, if the complete d manifold is chosen, the usual VASP order (xy, yz, z2, xz, x2-y2) is obtained in the LOCPROJ. This is done as shown below
 ```
-LOCPROJ = 2 : d : Pr 1
+LOCPROJ = 2 : d : Pr
 ```
+
+## convergence of projectors with Vasp
+
+for a good convergence of the projectors it is important to convergence the wavefunctions to high accuracy. Otherwise this often leads to off-diagonal elements in the the local Green's function. To check convergence pay attention to the rms and rms(c) values in the Vasp output. The former specifies the convergence of the KS wavefunction and the latter is difference of the input and out charge density. Note, this does not necessarily coincide with good convergence of the total energy in DFT! Here an example of two calculations for the same system, both converged down to `EDIFF= 1E-10` and Vasp stopped. First run:
+
+```
+       N       E                     dE             d eps       ncg     rms          rms(c)
+...
+DAV:  25    -0.394708006287E+02   -0.65893E-09   -0.11730E-10 134994   0.197E-06  0.992E-05
+...
+```
+second run with different smearing:
+```
+...
+DAV:  31    -0.394760088659E+02    0.39472E-09    0.35516E-13 132366   0.110E-10  0.245E-10
+...
+```
+The total energy is lower as well. But more importantly the second calculation produces well converged projectors preserving symmetries way better, with less off-diagonal elements in Gloc, making it way easier for the solver. Always pay attention to rms.
+
+
 
 ## remarks on the Vasp version
 

@@ -106,7 +106,11 @@ def read_config(config_file):
                 use hloc_dft to diagonalize occupations = 'hloc'
     oneshot_postproc_gamma_file : bool, optional, default=False
                 write the GAMMA file for vasp after completed one-shot calculations
-
+    measure_chi_SzSz: bool, optional, default=False
+                measure the dynamic spin suszeptibility chi(sz,sz(tau))
+                triqs.github.io/cthyb/unstable/guide/dynamic_susceptibility_notebook.html
+    measure_chi_insertions: int, optional, default=100
+                number of insertation for measurement of chi
     __Solver Parameters:__
     ----------
     length_cycle : int
@@ -128,6 +132,9 @@ def read_config(config_file):
                 use_norm_as_weight to true
     measure_g_tau : bool,optional, default=True
                 should the solver measure G(tau)?
+    measure_pert_order: bool, optional, default=False
+                measure perturbation order histograms: triqs.github.io/cthyb/latest/guide/perturbation_order_notebook.html
+                stored in the h5 archive under DMFT_results per iteration stored in pert_order_imp_X and, pert_order_total_imp_X
     move_double : bool, optional, default=True
                 double moves in solver
     perform_tail_fit : bool, optional, default=False
@@ -356,6 +363,15 @@ def read_config(config_file):
     else:
         general_parameters['oneshot_postproc_gamma_file'] = False
 
+    if 'measure_chi_SzSz' in config['general']:
+        general_parameters['measure_chi_SzSz'] = config['general'].getboolean('measure_chi_SzSz')
+    else:
+        general_parameters['measure_chi_SzSz'] = False
+    if 'measure_chi_insertions' in config['general']:
+        general_parameters['measure_chi_insertions'] = int(config['general']['measure_chi_insertions'])
+    else:
+        general_parameters['measure_chi_insertions'] = 100
+
 
     # solver related parameters
     # required parameters
@@ -386,6 +402,11 @@ def read_config(config_file):
         solver_parameters['move_double'] = config['solver_parameters'].getboolean('move_double')
     else:
         solver_parameters['move_double'] = True
+
+    if 'measure_pert_order' in config['solver_parameters']:
+        solver_parameters['measure_pert_order'] = config['solver_parameters'].getboolean('measure_pert_order')
+    else:
+        solver_parameters['measure_pert_order'] = False
 
     if 'move_shift' in config['solver_parameters']:
         solver_parameters['move_shift'] = config['solver_parameters'].getboolean('move_shift')

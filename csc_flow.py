@@ -110,15 +110,22 @@ def csc_flow_control(general_parameters, solver_parameters, dft_parameters, adva
                 h5_archive = HDFArchive(general_parameters['seedname']+'.h5', 'a')
                 if not 'DMFT_results' in h5_archive:
                     h5_archive.create_group('DMFT_results')
-                if not 'last_iter' in h5_archive['DMFT_results']:
+                if 'last_iter' in h5_archive['DMFT_results']:
+                    prev_iterations = h5_archive['DMFT_results']['iteration_count']
+                    print('previous iteration count of {} will be added to total number of iterations'.format(prev_iterations))
+                    general_parameters['prev_iterations'] = prev_iterations
+                else:
                     h5_archive['DMFT_results'].create_group('last_iter')
+                    general_parameters['prev_iterations'] = 0
                 if not 'DMFT_input' in h5_archive:
                     h5_archive.create_group('DMFT_input')
+                    h5_archive['DMFT_input'].create_group('solver')
 
                 # prepare observable dicts and files, which is stored on the master node
 
-                observables = prep_observables(general_parameters, h5_archive)
+                observables = prep_observables(h5_archive)
             observables = mpi.bcast(observables)
+            general_parameters = mpi.bcast(general_parameters)
 
         if mpi.is_master_node():
             start_dmft = timer()

@@ -11,7 +11,10 @@ Author: Max Merkel, 2020
 
 import sys
 import time
+import glob
 import numpy as np
+from multiprocessing import Pool
+from functools import partial
 
 from triqs_maxent.elementwise_maxent import PoormanMaxEnt
 from triqs_maxent.tau_maxent import TauMaxEnt
@@ -207,10 +210,16 @@ def main(external_path, iteration=None, read_g_latt_iw=False, include_offdiag=Fa
 
 
 if __name__ == '__main__':
-    if len(sys.argv) == 2:
-        main(sys.argv[1])
-    elif len(sys.argv) == 3:
-        main(sys.argv[1], sys.argv[2])
-    else:
+    if len(sys.argv) not in (2, 3):
         print('Please give the h5 name (and optionally the iteration). Exiting.')
         sys.exit(2)
+
+    files = glob.glob(sys.argv[1])
+    pool = Pool(processes=min(8, len(files)))
+
+    if len(sys.argv) == 2:
+        function = main
+    elif len(sys.argv) == 3:
+        function = partial(main, iteration=sys.argv[2])
+
+    pool.map(function, files)

@@ -51,7 +51,7 @@ def red_to_2ind(uijkl,n_sites,n_orb,out=False):
     U_par = U_mm'^oo = U_mm'mm' - U_mm'm'm (for intersite interaction)
     U_ijij (Hunds coupling)
 
-    the indices in VASP are switched: U_ijkl ---VASP--> U_ikjl 
+    the indices in VASP are switched: U_ijkl ---VASP--> U_ikjl
 
     Parameters
     ----------
@@ -102,13 +102,12 @@ def red_to_2ind(uijkl,n_sites,n_orb,out=False):
     return Uij_anti,Uijij,Uijji,Uij_par
 
 
-def calc_kan_params_egeg(uijkl,n_sites,n_orb,out=False):
+def calc_kan_params(uijkl,n_sites,n_orb,out=False):
     '''
     calculates the kanamori interaction parameters from a
     given Uijkl matrix. Follows the procedure given in
     PHYSICAL REVIEW B 86, 165105 (2012) Vaugier,Biermann
     formula 30,31,32
-
     Parameters
     ----------
     uijkl : numpy array
@@ -119,7 +118,6 @@ def calc_kan_params_egeg(uijkl,n_sites,n_orb,out=False):
         number of orbitals per atom
     out : bool
         verbose mode
-
     __Returns:__
     int_params : direct
         kanamori parameters
@@ -127,7 +125,7 @@ def calc_kan_params_egeg(uijkl,n_sites,n_orb,out=False):
 
     int_params = collections.OrderedDict()
     dim = n_sites*n_orb
-    Uij_anti,Uijij,Uij_par = red_to_2ind(uijkl,n_sites,n_orb,out)
+    Uij_anti,Uijij,Uijji,Uij_par = red_to_2ind(uijkl,n_sites,n_orb,out)
 
     # calculate intra-orbital U
     U = 0.0
@@ -169,9 +167,9 @@ def calc_u_avg_fulld(uijkl,n_sites,n_orb,out=False):
     page 8 or as done in
     PHYSICAL REVIEW B 86, 165105 (2012) Vaugier,Biermann
     formula 23, 25
-
     works atm only for full d shell (l=2)
 
+    Returns F0=U, and J=(F2+F4)/2
     Parameters
     ----------
     uijkl : numpy array
@@ -182,7 +180,6 @@ def calc_u_avg_fulld(uijkl,n_sites,n_orb,out=False):
         number of orbitals per atom
     out : bool
         verbose mode
-
     __Returns:__
     int_params : direct
         Slater parameters
@@ -190,33 +187,45 @@ def calc_u_avg_fulld(uijkl,n_sites,n_orb,out=False):
 
     int_params = collections.OrderedDict()
     dim = n_sites*n_orb
-    Uij_anti,Uijij,Uijji,Uij_par = red_to_2ind(uijkl,n_sites,n_orb,out=False)
+    Uij_anti,Uijij,Uijji,Uij_par = red_to_2ind(uijkl,n_sites,n_orb,out=out)
     # U_antipar = U_mm'^oo' = U_mm'mm' (Coulomb Int)
     # U_par = U_mm'^oo = U_mm'mm' - U_mm'm'm (for intersite interaction)
     # U_ijij (Hunds coupling)
-
-
-    # calculate intra-orbital U
-    U = 0.0
-    for i in range(0,n_orb):
-        for j in range(0,n_orb):
-            U += Uij_anti[i,j]
-    # 1/(2l+1)^2
-    U = U/(5*5)
-    int_params['U'] = U
+    # here we assume cubic harmonics (real harmonics) as basis functions in the order
+    # dz2 dxz dyz dx2-y2 dxy
+    # triqs basis: basis ordered as (“xy”,”yz”,”z^2”,”xz”,”x^2-y^2”)
 
     # calculate J
-    J = 0.0
+    J_cubic = 0.0
     for i in range(0,n_orb):
         for j in range(0,n_orb):
             if i != j:
-                J +=  Uijji[i,j]
-    J = J/ (20)
+                J_cubic +=  Uijji[i,j]
+    J_cubic = J_cubic/ (20)
     # 20 for 2l(2l+1)
+    int_params['J_cubic'] = J_cubic
+
+    # conversion from cubic to spherical:
+    J = 7 * J_cubic / 5
+
     int_params['J'] = J
 
+    # calculate intra-orbital U
+    U_0 = 0.0
+    for i in range(0,n_orb):
+            U_0 += Uij_anti[i,i]
+    U_0 = U_0 / n_orb
+    int_params['U_0'] = U_0
+
+    # now conversion from cubic to spherical
+    U = U_0 - ( 8*J_cubic/5 )
+
+    int_params['U'] = U
+
     if out:
-        print 'U= ', "{:.4f}".format(U)
-        print 'J= ', "{:.4f}".format(J)
+        print 'cubic U_0= ', "{:.4f}".format(U_0)
+        print 'cubic J_cubic= ', "{:.4f}".format(J_cubic)
+        print 'spherical F0=U= ', "{:.4f}".format(U)
+        print 'spherical J=(F2+f4)/14 = ', "{:.4f}".format(J)
 
     return int_params

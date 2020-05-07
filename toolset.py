@@ -15,10 +15,8 @@ import numpy as np
 import pytriqs.utility.mpi as mpi
 from pytriqs.archive import HDFArchive
 from triqs_dft_tools.converters.plovasp.vaspio import VaspData
-from pytriqs.gf import BlockGf
+from pytriqs.gf import BlockGf, GfImFreq
 from pytriqs.gf.tools import fit_legendre
-from pytriqs.gf.gf_fnt import enforce_discontinuity
-
 
 def store_dft_eigvals(config_file, path_to_h5, iteration):
     """
@@ -220,33 +218,76 @@ def load_sigma_from_h5(path_to_h5, iteration):
 
     dc_imp : numpy array
         DC potentials
-    dc_energ : numpy array
+    dc_energy : numpy array
         DC energies per impurity
+    density_matrix : numpy arrays
+        Density matrix from the previous self-energy
     """
-    self_energies = []
 
-    old_calc = HDFArchive(path_to_h5, 'r')
+    internal_path = 'DMFT_results/'
+    internal_path += 'last_iter' if iteration == -1 else 'it_{}'.format(iteration)
 
-    if iteration == -1:
-        for icrsh in range(old_calc['dft_input']['n_inequiv_shells']):
-            print('loading Sigma_imp'+str(icrsh)+' at last iteration from '+path_to_h5)
-            self_energies.append(old_calc['DMFT_results']['last_iter']['Sigma_iw_'+str(icrsh)])
+    with HDFArchive(path_to_h5, 'r') as archive:
+        n_inequiv_shells = archive['dft_input']['n_inequiv_shells']
 
-        # loading DC from this iteration as well!
-        dc_imp = old_calc['DMFT_results']['last_iter']['DC_pot']
-        dc_energ = old_calc['DMFT_results']['last_iter']['DC_energ']
-    else:
-        for icrsh in range(old_calc['dft_input']['n_inequiv_shells']):
-            print('loading Sigma_imp'+str(icrsh)+' at it '+str(iteration)+' from '+path_to_h5)
-            self_energies.append(old_calc['DMFT_results']['it_'+str(iteration)]['Sigma_iw_'+str(icrsh)])
+        # Loads previous self-energies and DC
+        self_energies = [archive[internal_path]['Sigma_iw_{}'.format(iineq)]
+                         for iineq in range(n_inequiv_shells)]
+        dc_imp = archive[internal_path]['DC_pot']
+        dc_energy = archive[internal_path]['DC_energ']
 
-        # loading DC from this iteration as well!
-        dc_imp = old_calc['DMFT_results']['it_'+str(iteration)]['DC_pot']
-        dc_energ = old_calc['DMFT_results']['it_'+str(iteration)]['DC_energ']
+        # Loads density_matrix to recalculate DC if dc_dmft
+        density_matrix = archive[internal_path]['dens_mat_post']
 
-    del old_calc
+    print('Loaded Sigma_imp0...imp{} '.format(n_inequiv_shells-1)
+          + ('at last it ' if iteration == -1 else 'at it {} '.format(iteration))
+          + 'from {}'.format(path_to_h5))
 
-    return self_energies, dc_imp, dc_energ
+    return self_energies, dc_imp, dc_energy, density_matrix
+
+
+def sumk_sigma_to_solver_struct(sum_k, start_sigma):
+    """
+    Extracts the local Sigma. Copied from SumkDFT.extract_G_loc, version 2.1.x.
+
+    Parameters
+    ----------
+    sum_k : SumkDFT object
+        Sumk object with the information about the correct block structure
+    start_sigma : list of BlockGf (Green's function) objects
+        List of Sigmas in sum_k block structure that are to be converted.
+
+    Returns
+    -------
+    Sigma_inequiv : list of BlockGf (Green's function) objects
+        List of Sigmas that can be used to initialize the solver
+    """
+
+    Sigma_local = [start_sigma[icrsh].copy() for icrsh in range(sum_k.n_corr_shells)]
+    Sigma_inequiv = [BlockGf(name_block_generator=[(block, GfImFreq(indices=inner, mesh=Sigma_local[0].mesh))
+                                                   for block, inner in sum_k.gf_struct_solver[ish].iteritems()],
+                             make_copies=False) for ish in range(sum_k.n_inequiv_shells)]
+
+    # G_loc is rotated to the local coordinate system
+    if sum_k.use_rotations:
+        for icrsh in range(sum_k.n_corr_shells):
+            for bname, gf in Sigma_local[icrsh]:
+                Sigma_local[icrsh][bname] << sum_k.rotloc(
+                    icrsh, gf, direction='toLocal')
+
+    # transform to CTQMC blocks
+    for ish in range(sum_k.n_inequiv_shells):
+        for block, inner in sum_k.gf_struct_solver[ish].iteritems():
+            for ind1 in inner:
+                for ind2 in inner:
+                    block_sumk, ind1_sumk = sum_k.solver_to_sumk[ish][(block, ind1)]
+                    block_sumk, ind2_sumk = sum_k.solver_to_sumk[ish][(block, ind2)]
+                    Sigma_inequiv[ish][block][ind1, ind2] << Sigma_local[
+                        sum_k.inequiv_to_corr[ish]][block_sumk][ind1_sumk, ind2_sumk]
+
+    # return only the inequivalent shells
+    return Sigma_inequiv
+
 
 def legendre_filter(G_tau, order=100, G_l_cut=1e-19):
     """ Filter binned imaginary time Green's function
@@ -317,3 +358,38 @@ def legendre_filter(G_tau, order=100, G_l_cut=1e-19):
 
     return G_l
 
+def chi_SzSz_setup(sum_k, general_parameters, solver_parameters):
+    """
+
+    Parameters
+    ----------
+    sum_k : SumkDFT object
+        Sumk object with the information about the correct block structure
+    general_paramters: general params dict
+    solver_parameters: solver params dict
+
+    Returns
+    -------
+    solver_parameters :  dict
+        solver_paramters for the QMC solver
+    Sz_list : list of S_op operators to measure per impurity
+    """
+
+    from pytriqs.operators.util.observables import S_op
+
+    mpi.report('setting up Chi(Sz,Sz(tau)) measurement')
+
+    Sz_list = [None] * sum_k.n_inequiv_shells
+
+    for icrsh in range(sum_k.n_inequiv_shells):
+        n_orb = sum_k.corr_shells[icrsh]['dim']
+        orb_names = list(range(n_orb))
+
+        Sz_list[icrsh] = S_op('z',
+                              spin_names=general_parameters['spin_names'],
+                              orb_names=orb_names,
+                              map_operator_structure=sum_k.sumk_to_solver[icrsh])
+
+    solver_parameters['measure_O_tau_min_ins'] = general_parameters['measure_chi_insertions']
+
+    return solver_parameters, Sz_list
