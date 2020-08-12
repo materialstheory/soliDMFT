@@ -42,6 +42,7 @@ def read_uijkl(path_to_uijkl,n_sites,n_orb):
 
     return uijkl
 
+
 def red_to_2ind(uijkl,n_sites,n_orb,out=False):
     '''
     reduces the 4index coulomb matrix to a 2index matrix and
@@ -50,9 +51,7 @@ def red_to_2ind(uijkl,n_sites,n_orb,out=False):
     U_antipar = U_mm'^oo' = U_mm'mm' (Coulomb Int)
     U_par = U_mm'^oo = U_mm'mm' - U_mm'm'm (for intersite interaction)
     U_ijij (Hunds coupling)
-
     the indices in VASP are switched: U_ijkl ---VASP--> U_ikjl
-
     Parameters
     ----------
     uijkl : numpy array
@@ -63,7 +62,6 @@ def red_to_2ind(uijkl,n_sites,n_orb,out=False):
         number of orbitals per atom
     out : bool
         verbose mode
-
     __Returns:__
     Uij_anti : numpy array
         red 2 index matrix U_mm'mm'
@@ -73,7 +71,6 @@ def red_to_2ind(uijkl,n_sites,n_orb,out=False):
         red 2 index matrix Uijji
     Uij_par : numpy array
         red 2 index matrix U_mm\'mm\' - U_mm\'m\'m
-
     '''
     dim = n_sites*n_orb
 
@@ -86,18 +83,18 @@ def red_to_2ind(uijkl,n_sites,n_orb,out=False):
     for i in range(0,n_orb*n_sites):
         for j in range(0,n_orb*n_sites):
             # the indices in VASP are switched: U_ijkl ---VASP--> U_ikjl
-            Uij_anti[i,j] = uijkl[i,i,j,j]
-            Uijij[i,j] =  uijkl[i,j,i,j]
+            Uij_anti[i,j] = uijkl[i,j,i,j]
+            Uijij[i,j] =  uijkl[i,i,j,j]
             Uijji[i,j] = uijkl[i,j,j,i]
             Uij_par[i,j] = uijkl[i,i,j,j]-uijkl[i,j,j,i]
 
     np.set_printoptions(precision=3,suppress=True)
 
     if out:
-        print 'reduced U anti-parallel = U_mm\'\^oo\' = U_mm\'mm\' matrix : \n', Uij_anti
-        print 'reduced Uijij : \n', Uijij
-        print 'reduced Uijji : \n', Uijji
-        print 'reduced U parallel = U_mm\'\^oo = U_mm\'mm\' - U_mm\'m\'m matrix : \n', Uij_par
+        print( 'reduced U anti-parallel = U_mm\'\^oo\' = U_mm\'mm\' matrix : \n', Uij_anti)
+        print( 'reduced Uijij : \n', Uijij)
+        print( 'reduced Uijji : \n', Uijji)
+        print('reduced U parallel = U_mm\'\^oo = U_mm\'mm\' - U_mm\'m\'m matrix : \n', Uij_par)
 
     return Uij_anti,Uijij,Uijji,Uij_par
 
@@ -125,7 +122,6 @@ def calc_kan_params(uijkl,n_sites,n_orb,out=False):
 
     int_params = collections.OrderedDict()
     dim = n_sites*n_orb
-    Uij_anti,Uijij,Uijji,Uij_par = red_to_2ind(uijkl,n_sites,n_orb,out)
 
     # calculate intra-orbital U
     U = 0.0
@@ -201,12 +197,12 @@ def calc_u_avg_fulld(uijkl,n_sites,n_orb,out=False):
         for j in range(0,n_orb):
             if i != j:
                 J_cubic +=  Uijji[i,j]
-    J_cubic = J_cubic/ (20)
+    J_cubic = J_cubic/(20.0)
     # 20 for 2l(2l+1)
     int_params['J_cubic'] = J_cubic
 
     # conversion from cubic to spherical:
-    J = 7 * J_cubic / 5
+    J = 7.0 * J_cubic / 5.0
 
     int_params['J'] = J
 
@@ -214,18 +210,64 @@ def calc_u_avg_fulld(uijkl,n_sites,n_orb,out=False):
     U_0 = 0.0
     for i in range(0,n_orb):
             U_0 += Uij_anti[i,i]
-    U_0 = U_0 / n_orb
+    U_0 = U_0 /float(n_orb)
     int_params['U_0'] = U_0
 
     # now conversion from cubic to spherical
-    U = U_0 - ( 8*J_cubic/5 )
+    U = U_0 - ( 8.0*J_cubic/5.0 )
 
     int_params['U'] = U
 
     if out:
-        print 'cubic U_0= ', "{:.4f}".format(U_0)
-        print 'cubic J_cubic= ', "{:.4f}".format(J_cubic)
-        print 'spherical F0=U= ', "{:.4f}".format(U)
-        print 'spherical J=(F2+f4)/14 = ', "{:.4f}".format(J)
+        print('cubic U_0= ', "{:.4f}".format(U_0))
+        print('cubic J_cubic= ', "{:.4f}".format(J_cubic))
+        print('spherical F0=U= ', "{:.4f}".format(U))
+        print('spherical J=(F2+f4)/14 = ', "{:.4f}".format(J))
 
     return int_params
+
+
+def fit_slater_fulld(uijkl,n_sites,U_init,J_init):
+    '''
+    finds best Slater parameters U, J for given Uijkl tensor
+    using the triqs U_matrix operator routine
+    assumes F2/F4=0.625
+    '''
+
+    from triqs.operators.util.U_matrix import U_matrix, reduce_4index_to_2index
+    import scipy
+    # transform U matrix orbital basis ijkl to nmop, note the last two indices need to be switched in the T matrices
+    def transformU(U_matrix, T):
+        return np.einsum("im,jn,ijkl,lo,kp->mnpo",np.conj(T),np.conj(T),U_matrix,T,T)
+
+    def minimizer(parameters):
+        U_int, J_hund = parameters
+        Umat_full = U_matrix(l=2, U_int=U_int, J_hund=J_hund, basis='cubic')
+        Umat_full = transformU(Umat_full, rot_def_to_w90)
+
+        Umat, Upmat = reduce_4index_to_2index(Umat_full)
+        u_iijj_crpa = Uij_anti[:5,:5]
+        u_iijj_slater = Upmat - Umat
+        u_ijij_crpa = Uijij[:5,:5]
+        u_ijij_slater = Upmat
+        return np.sum((u_iijj_crpa - u_iijj_slater)**2 + (u_ijij_crpa - u_ijij_slater)**2)
+
+    # rot triqs d basis to w90 default basis!
+    # check your order of orbitals assuming:
+    # dz2, dxz, dyz, dx2-y2, dxy
+    rot_def_to_w90 = np.array([[0, 0, 0, 0, 1],
+                               [0, 0, 1, 0, 0],
+                               [1, 0, 0, 0, 0],
+                               [0, 1, 0, 0, 0],
+                               [0, 0, 0, 1, 0]])
+
+    Uij_anti,Uijij,Uijji,Uij_par = red_to_2ind(uijkl,n_sites,n_orb=5,out=False)
+
+
+    result = scipy.optimize.minimize(minimizer, (3,1))
+
+
+    U_int, J_hund = result.x
+    print('Final results from fit: U = {:.3f} eV, J = {:.3f} eV'.format(U_int, J_hund))
+
+    return U_int, J_hund

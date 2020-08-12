@@ -10,7 +10,7 @@ examples for SrVO3 and LuNiO3. For more details please take a look at the PhD
 thesis of Merzuk Kaltak (http://othes.univie.ac.at/38099/).
 
 ## file description
- * `eval_U.py` extraction of Coulomb tensor, calculation of reduced two-index matrices, and calculation of Kanamori or Slater parameters
+ * `eval_U.py` extraction of Coulomb tensor, calculation of reduced two-index matrices, and calculation / fitting of Kanamori or Slater parameters
  * `ext_eps.sh` a small bash script that can extract $\epsilon^-1(|q+G|)=[1-VP^r]^-1$ from a given vasprun.xml file
 
 ## Workflow:
@@ -35,8 +35,8 @@ thesis of Merzuk Kaltak (http://othes.univie.ac.at/38099/).
 3. if needed generate wannier functions with ALGO=none (read wavecar and chgcar additionally) and do 0 steps to get the wannier functions correct - this step is not needed, if one has already a wannier90.win file
 4. ALGO=CRPA to make vasp calculate U matrices (bare, screened etc. )
     1. omegamax=0 (default) for frequency depend U matrix
-    2. NCRPALOW,NCRPAHIGH for selecting bands in a non-disentagled workflow
-    3. or set NTARGET= # of target states for using the KUBO formalism for disentanglement. Works directly with the wannier functions as basis
+    2. NCRPA_BANDS for selecting bands in a non-disentagled workflow (vasp.at/wiki/index.php/NCRPA_BANDS)
+    3. or set NTARGET STATES= # of target states for using the KUBO formalism for disentanglement. Works directly with the wannier functions as basis. The states not listet will be included in screening.
     4. example file:
         * SYSTEM = SrVO3
         * ISMEAR =  0
@@ -46,23 +46,24 @@ thesis of Merzuk Kaltak (http://othes.univie.ac.at/38099/).
         * EDIFF = 1E-8
         * NBANDS =96
         * ALGO = CRPA
-        * NCRPAHIGH= 23
-        * NCRPALOW= 21 #for selecting bands
-        * or NTARGET_STATES = 3*1
+        * NTARGET_STATES = 1 2 3
         * LWAVE = .FALSE.
         * NCSHMEM=1
         * LMAXMIX=4
 
 ## important flags:
-if you get sigsevs while calculationg the polarization make sure your local stack
+if you get sigsevs while calculating the polarization make sure your local stack
 size is large enough by setting:
 ```
 ulimit -s unlimited
 ```
 
-* ALGO=CRPA (automatically calls wannier90 and calcs the U matrix)
-* NTARGET_STATES= # number of target wannier funcitons if more target states than basis functions for U matrix one specifiy it like 3*1 2*0 . This would build the U matrix for the first 3 wannier functions in wannier90.win, where 5 wannier functions are specified there in total and not for the last 2 (2*0).
-* NCRPALOW / NCRPAHIGH for selecting bands and using the standard CRPA formalism
+* ALGO=CRPA (automatically calls wannier90 and calculates the U matrix)
+* NTARGET_STATES= # number of target Wannier funcitons if more target states than basis functions for U matrix one specify the one to exclude from screening as integer list: `1 2 3`. This would build the U matrix for the first 3 Wannier functions in wannier90.win, where 5 Wannier functions are specified there in total and the last 2 are included for the calculation of screening.
+* for the disentanglement with `NTARGET_STATES` there are 3 options in cRPA:
+    * LPROJECTED (default): Kubo method by Merzuk (http://othes.univie.ac.at/38099/)
+    * LDISENTANGLED: disentanglement of Miyake (doi.org/10.1103/PhysRevB.80.155134)
+    * LWEIGHTED: weighted method of Friedrich and Shih
 * LOPTICS= TRUE for calculating the necessary response integrals withing the Kohn-Sham Basis W000x.tmp
 * NCSHMEM=1 nodody knows, but it is needed!
 * VCUTOFF cuttoff for bare interaction V. This tests your convergency
@@ -92,9 +93,8 @@ The procedure is then to first convergence KPOINTS and ENCUT, where KPOINTS depe
 * in VASP the two inner indices are exchanged compared to the notation in PRB 86, 165105 (2012): U_ijkl = U_ikjl^VASP
 * when specifying bands, always start with 1 not 0.
 * GW pseudopotentials can be more accurate, since they provide higher cut-offs e.g. , test this...
-* NCRPALOW/HIGH and NTARGET_STATES gives the same result in non-entangled bands
+* NCRPA_BANDS and NTARGET_STATES gives the same result in non-entangled bands
 
 ## version and compilation:
-* supported vasp version 5.4.3 developer version
-* the flag  -Dvasp6 must be set!!!! -> will be a feature of vasp 6+
-* safer to use wannier90 1.2 than 2.x !
+* supported vasp version 6 or higher
+* wannier90 upto v3.1 works, if no features exclusively to wannier90 v3 are used
