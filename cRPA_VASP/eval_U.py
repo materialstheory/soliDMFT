@@ -7,7 +7,7 @@ import collections
 python functions for reading Uijkl from a VASP cRPA run and the evaluating the matrix
 elements for different basis sets.
 
-Copyright (C) 2019, A. Hampel and C. Ederer from Materials Theory Group
+Copyright (C) 2020, A. Hampel and M. Merkel from Materials Theory Group
 at ETH Zurich
 '''
 
@@ -189,7 +189,7 @@ def calc_u_avg_fulld(uijkl,n_sites,n_orb,out=False):
     # U_ijij (Hunds coupling)
     # here we assume cubic harmonics (real harmonics) as basis functions in the order
     # dz2 dxz dyz dx2-y2 dxy
-    # triqs basis: basis ordered as (“xy”,”yz”,”z^2”,”xz”,”x^2-y^2”)
+    # triqs basis: basis ordered as (xy,yz,z^2,xz,x^2-y^2)
 
     # calculate J
     J_cubic = 0.0
@@ -234,8 +234,8 @@ def fit_slater_fulld(uijkl,n_sites,U_init,J_init):
     assumes F2/F4=0.625
     '''
 
-    from triqs.operators.util.U_matrix import U_matrix, reduce_4index_to_2index
-    import scipy
+    from pytriqs.operators.util.U_matrix import U_matrix, reduce_4index_to_2index
+    from scipy.optimize import minimize
     # transform U matrix orbital basis ijkl to nmop, note the last two indices need to be switched in the T matrices
     def transformU(U_matrix, T):
         return np.einsum("im,jn,ijkl,lo,kp->mnpo",np.conj(T),np.conj(T),U_matrix,T,T)
@@ -264,7 +264,7 @@ def fit_slater_fulld(uijkl,n_sites,U_init,J_init):
     Uij_anti,Uijij,Uijji,Uij_par = red_to_2ind(uijkl,n_sites,n_orb=5,out=False)
 
 
-    result = scipy.optimize.minimize(minimizer, (3,1))
+    result = minimize(minimizer, (U_init,J_init))
 
 
     U_int, J_hund = result.x
