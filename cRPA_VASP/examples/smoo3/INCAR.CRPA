@@ -1,0 +1,15 @@
+SYSTEM = SrMoO3-pdd
+ISMEAR =  0
+VCUTOFF=800
+ENCUT=500
+SIGMA =  0.01
+EDIFF = 1E-8
+NBANDS =280
+ALGO = CRPA
+# select w90 functions for screening 
+# first 5 wfs are the target d states
+NTARGET_STATES = 1 2 3 4 5
+LWAVE = .FALSE.
+NCSHMEM=1 
+# projected method for disentanglement from Kaltak
+LPROJECTED = .TRUE.
