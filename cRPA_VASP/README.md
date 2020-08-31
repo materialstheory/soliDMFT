@@ -88,6 +88,15 @@ bands must be used. A good choice is 3*NELECT (# of electrons in the systems).
 
 The procedure is then to first convergence KPOINTS and ENCUT, where KPOINTS dependency of the results seems to be weak. Then increase NBANDS until U does not change anymore.
 
+## Parameterization of U and J from cRPA calculations
+`eval_u.py` provides four different methods:
+- Kanamori: `calc_kan_params(...)` for extracting Kanamori parameters for a cubic system 
+- Slater 1: using averaging and symmetries: $`U_\mathrm{cubic} = \frac1{2l+1} \sum_i (U_{iiii} - U_{iiii})`$, $`J_\mathrm{cubic} = \frac1{2l(2l+1)} \sum_{i, j\neq i} U_{ijji}`$. Then, the interaction parameters follow from the conversion $`U = U_\mathrm{cubic} - \frac85 J_\mathrm{cubic}, J = \frac75 J_\mathrm{cubic}`$.
+- Slater 2: using direct averaging: $`U = \frac1{(2l+1)^2} \sum_{i, j} U_{iijj}`$ and $`J = U - \frac1{2l(2l+1)} \sum_{i, j} U_{ijij}`$. This is more straight forward that Slater 1, but ignores the basis in which the cRPA Uijkl matrix is written. For a perfect Slater matrix this gives the same results if applied in cubic or spherical harmonics basis.
+- Slater 3: using an least-square fit (summed over the matrix elements) of the two-index matrices $`U_{iijj}`$ and $`U_{ijij}`$ to the Slater Hamiltonian. 
+
+These three methods give the same results if the cRPA matrix is of the Slater type already. Be aware of the order of your basis functions and the basis in which the $U$ tensor is written!
+
 ## general sidemarks:
 * careful with the averaged U,u,J values in the end of the OUTCAR, because they sum all off-diagonal elements! Also inter-site, if the unit cell contains more than one target atom
 * in VASP the two inner indices are exchanged compared to the notation in PRB 86, 165105 (2012): U_ijkl = U_ikjl^VASP
