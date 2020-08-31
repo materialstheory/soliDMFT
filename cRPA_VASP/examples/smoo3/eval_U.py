@@ -99,6 +99,61 @@ def red_to_2ind(uijkl,n_sites,n_orb,out=False):
     return Uij_anti,Uijij,Uijji,Uij_par
 
 
+def calc_kan_params(uijkl,n_sites,n_orb,out=False):
+    '''
+    calculates the kanamori interaction parameters from a
+    given Uijkl matrix. Follows the procedure given in
+    PHYSICAL REVIEW B 86, 165105 (2012) Vaugier,Biermann
+    formula 30,31,32
+    Parameters
+    ----------
+    uijkl : numpy array
+        4d numpy array of Coulomb tensor
+    n_sites: int
+        number of different atoms (Wannier centers)
+    n_orb : int
+        number of orbitals per atom
+    out : bool
+        verbose mode
+    __Returns:__
+    int_params : direct
+        kanamori parameters
+    '''
+
+    int_params = collections.OrderedDict()
+    dim = n_sites*n_orb
+
+    # calculate intra-orbital U
+    U = 0.0
+    for i in range(0,n_orb):
+        U += uijkl[i,i,i,i]
+    U = U/(n_orb)
+    int_params['U'] = U
+
+    # calculate the U'
+    Uprime = 0.0
+    for i in range(0,n_orb):
+        for j in range(0,n_orb):
+            if i != j:
+                Uprime +=  uijkl[i,i,j,j]
+    Uprime = Uprime/ (n_orb*(n_orb-1))
+    int_params['Uprime'] = Uprime
+
+    # calculate J
+    J = 0.0
+    for i in range(0,n_orb):
+        for j in range(0,n_orb):
+            if i != j:
+                J +=  uijkl[i,j,i,j]
+    J = J/ (n_orb*(n_orb-1))
+    int_params['J'] = J
+
+    if out:
+        print 'U= ', "{:.4f}".format(U)
+        print 'U\'= ', "{:.4f}".format(Uprime)
+        print 'J= ', "{:.4f}".format(J)
+
+    return int_params
 
 def calc_u_avg_fulld(uijkl,n_sites,n_orb,out=False):
     '''
@@ -170,8 +225,100 @@ def calc_u_avg_fulld(uijkl,n_sites,n_orb,out=False):
 
     return int_params
 
+def calculate_interaction_from_averaging(uijkl, n_sites, n_orb, out=False):
+    '''
+    calculates U,J by averaging directly the Uijkl matrix
+    ignoring if tensor is given in spherical or cubic basis.
+    The assumption here is that the averaging gives indepentendly
+    of the choosen basis (cubic or spherical harmonics) the same results
+    if Uijkl is a true Slater matrix.
+
+    Returns F0=U, and J=(F2+F4)/2
+
+    Parameters
+    ----------
+    uijkl : numpy array
+        4d numpy array of Coulomb tensor
+    n_sites: int
+        number of different atoms (Wannier centers)
+    n_orb : int
+        number of orbitals per atom
+    out : bool
+        verbose mode
+    __Returns:__
+    U, J: tuple
+        Slater parameters
+    '''
+
+    l = 2
+
+    dim = n_sites*n_orb
+    Uij_anti,Uijij,Uijji,Uij_par = red_to_2ind(uijkl,n_sites,n_orb,out=out)
+
+    # Calculates Slater-averaged parameters directly
+    U = [None] * n_sites
+    J = [None] * n_sites
+    for impurity in range(n_sites):
+        u_ijij_imp = Uijij[impurity*n_orb:(impurity+1)*n_orb, impurity*n_orb:(impurity+1)*n_orb]
+        U[impurity] = np.mean(u_ijij_imp)
+
+        u_iijj_imp = Uij_anti[impurity*n_orb:(impurity+1)*n_orb, impurity*n_orb:(impurity+1)*n_orb]
+        J[impurity] = np.sum(u_iijj_imp) / (2*l*(2*l+1)) - U[impurity] / (2*l)
+    U = np.mean(U)
+    J = np.mean(J)
+
+    if out:
+        print('spherical F0=U= ', "{:.4f}".format(U))
+        print('spherical J=(F2+f4)/14 = ', "{:.4f}".format(J))
+
+    return U, J
+
+def fit_slater_fulld(uijkl,n_sites,U_init,J_init):
+    '''
+    finds best Slater parameters U, J for given Uijkl tensor
+    using the triqs U_matrix operator routine
+    assumes F2/F4=0.625
+    '''
+
+    from pytriqs.operators.util.U_matrix import U_matrix, reduce_4index_to_2index
+    from scipy.optimize import minimize
+    # transform U matrix orbital basis ijkl to nmop, note the last two indices need to be switched in the T matrices
+    def transformU(U_matrix, T):
+        return np.einsum("im,jn,ijkl,lo,kp->mnpo",np.conj(T),np.conj(T),U_matrix,T,T)
+
+    def minimizer(parameters):
+        U_int, J_hund = parameters
+        Umat_full = U_matrix(l=2, U_int=U_int, J_hund=J_hund, basis='cubic')
+        Umat_full = transformU(Umat_full, rot_def_to_w90)
+
+        Umat, Upmat = reduce_4index_to_2index(Umat_full)
+        u_iijj_crpa = Uij_anti[:5,:5]
+        u_iijj_slater = Upmat - Umat
+        u_ijij_crpa = Uijij[:5,:5]
+        u_ijij_slater = Upmat
+        return np.sum((u_iijj_crpa - u_iijj_slater)**2 + (u_ijij_crpa - u_ijij_slater)**2)
+
+    # rot triqs d basis to w90 default basis!
+    # check your order of orbitals assuming:
+    # dz2, dxz, dyz, dx2-y2, dxy
+    rot_def_to_w90 = np.array([[0, 0, 0, 0, 1],
+                               [0, 0, 1, 0, 0],
+                               [1, 0, 0, 0, 0],
+                               [0, 1, 0, 0, 0],
+                               [0, 0, 0, 1, 0]])
+
+    Uij_anti,Uijij,Uijji,Uij_par = red_to_2ind(uijkl,n_sites,n_orb=5,out=False)
+
+
+    result = minimize(minimizer, (U_init,J_init))
+
+
+    U_int, J_hund = result.x
+    print('Final results from fit: U = {:.3f} eV, J = {:.3f} eV'.format(U_int, J_hund))
+
+    return U_int, J_hund
 
 uijkl=read_uijkl('UIJKL',1,5)
 calc_u_avg_fulld(uijkl,n_sites=1,n_orb=5,out=True)
 
-
+calculate_interaction_from_averaging(uijkl, n_sites=1, n_orb=5, out=True)

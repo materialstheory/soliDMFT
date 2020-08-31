@@ -226,6 +226,53 @@ def calc_u_avg_fulld(uijkl,n_sites,n_orb,out=False):
 
     return int_params
 
+def calculate_interaction_from_averaging(uijkl, n_sites, n_orb, out=False):
+    '''
+    calculates U,J by averaging directly the Uijkl matrix
+    ignoring if tensor is given in spherical or cubic basis.
+    The assumption here is that the averaging gives indepentendly
+    of the choosen basis (cubic or spherical harmonics) the same results
+    if Uijkl is a true Slater matrix.
+
+    Returns F0=U, and J=(F2+F4)/2
+
+    Parameters
+    ----------
+    uijkl : numpy array
+        4d numpy array of Coulomb tensor
+    n_sites: int
+        number of different atoms (Wannier centers)
+    n_orb : int
+        number of orbitals per atom
+    out : bool
+        verbose mode
+    __Returns:__
+    U, J: tuple
+        Slater parameters
+    '''
+
+    l = 2
+
+    dim = n_sites*n_orb
+    Uij_anti,Uijij,Uijji,Uij_par = red_to_2ind(uijkl,n_sites,n_orb,out=out)
+
+    # Calculates Slater-averaged parameters directly
+    U = [None] * n_sites
+    J = [None] * n_sites
+    for impurity in range(n_sites):
+        u_ijij_imp = Uijij[impurity*n_orb:(impurity+1)*n_orb, impurity*n_orb:(impurity+1)*n_orb]
+        U[impurity] = np.mean(u_ijij_imp)
+
+        u_iijj_imp = Uij_anti[impurity*n_orb:(impurity+1)*n_orb, impurity*n_orb:(impurity+1)*n_orb]
+        J[impurity] = np.sum(u_iijj_imp) / (2*l*(2*l+1)) - U[impurity] / (2*l)
+    U = np.mean(U)
+    J = np.mean(J)
+
+    if out:
+        print('spherical F0=U= ', "{:.4f}".format(U))
+        print('spherical J=(F2+f4)/14 = ', "{:.4f}".format(J))
+
+    return U, J
 
 def fit_slater_fulld(uijkl,n_sites,U_init,J_init):
     '''
