@@ -91,7 +91,7 @@ The procedure is then to first convergence KPOINTS and ENCUT, where KPOINTS depe
 ## Parameterization of U and J from cRPA calculations
 `eval_u.py` provides four different methods:
 - Kanamori: `calc_kan_params(...)` for extracting Kanamori parameters for a cubic system 
-- Slater 1: `calc_u_avg_fulld(...)` using averaging and symmetries: $`U_\mathrm{cubic} = \frac1{2l+1} \sum_i (U_{iiii} - U_{iiii})`$, $`J_\mathrm{cubic} = \frac1{2l(2l+1)} \sum_{i, j\neq i} U_{ijji}`$. Then, the interaction parameters follow from the conversion $`U = U_\mathrm{cubic} - \frac85 J_\mathrm{cubic}, J = \frac75 J_\mathrm{cubic}`$.
+- Slater 1: `calc_u_avg_fulld(...)` using averaging and symmetries: $`U_\mathrm{cubic} = \frac1{2l+1} \sum_i (U_{iiii})`$, $`J_\mathrm{cubic} = \frac1{2l(2l+1)} \sum_{i, j\neq i} U_{ijji}`$. Then, the interaction parameters follow from the conversion $`U = U_\mathrm{cubic} - \frac85 J_\mathrm{cubic}, J = \frac75 J_\mathrm{cubic}`$.
 - Slater 2: `calculate_interaction_from_averaging(...)` using direct averaging: $`U = \frac1{(2l+1)^2} \sum_{i, j} U_{iijj}`$ and $`J = U - \frac1{2l(2l+1)} \sum_{i, j} U_{ijij}`$. This is more straight forward that Slater 1, but ignores the basis in which the cRPA Uijkl matrix is written. For a perfect Slater matrix this gives the same results if applied in cubic or spherical harmonics basis.
 - Slater 3: `fit_slater_fulld(...) `using an least-square fit (summed over the matrix elements) of the two-index matrices $`U_{iijj}`$ and $`U_{ijij}`$ to the Slater Hamiltonian. 
 
