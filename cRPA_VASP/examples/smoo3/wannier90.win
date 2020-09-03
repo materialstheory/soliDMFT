@@ -1,14 +1,11 @@
 num_wann  = 19
-num_bands = 23
-
-exclude_bands = 1-10, 34-280
 
 num_iter = 1000
 conv_window = 5
 conv_tol = 1e-15
 conv_noise_amp = 1
 
-dis_win_min = -0.9
+dis_win_min = -2.0
 dis_win_max = 20.0
 dis_froz_min = -0.4
 dis_froz_max = 9.5
