@@ -11,7 +11,7 @@ import socket
 import signal
 from collections import defaultdict
 
-import pytriqs.utility.mpi as mpi
+import triqs.utility.mpi as mpi
 
 
 def _create_hostfile(number_cores, cluster_name):

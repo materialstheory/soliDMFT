@@ -23,8 +23,8 @@ from triqs_maxent.sigma_continuator import InversionSigmaContinuator, DirectSigm
 from triqs_maxent.elementwise_maxent import PoormanMaxEnt
 from triqs_maxent.omega_meshes import HyperbolicOmegaMesh
 from triqs_maxent.alpha_meshes import LogAlphaMesh
-from pytriqs.gf import BlockGf
-from pytriqs.archive import HDFArchive
+from triqs.gf import BlockGf
+from h5 import HDFArchive
 
 
 def _read_h5(external_path, iteration=None):
@@ -147,7 +147,7 @@ def main(external_path, iteration=None):
 
     Returns
     -------
-    list of pytriqs.gf.GfReFreq, per impurity: Sigma(omega) as a GF object
+    list of triqs.gf.GfReFreq, per impurity: Sigma(omega) as a GF object
     """
     start_time = time.time()
 

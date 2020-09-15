@@ -22,8 +22,8 @@ import shutil
 from timeit import default_timer as timer
 
 # triqs
-import pytriqs.utility.mpi as mpi
-from pytriqs.archive import HDFArchive
+import triqs.utility.mpi as mpi
+from h5 import HDFArchive
 
 # own modules
 from read_config import read_config

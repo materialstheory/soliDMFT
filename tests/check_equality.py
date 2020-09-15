@@ -6,7 +6,7 @@ numpy.isclose for float comparison.
 """
 
 import numpy as np
-from collections import Iterable
+from collections.abc import Iterable
 
 
 def are_iterables_equal(obs1, obs2):
@@ -19,7 +19,7 @@ def are_iterables_equal(obs1, obs2):
     Float: numpy.isclose
     Else: Equality with ==
     """
-    
+
     if isinstance(obs1, dict):
         if sorted(obs1.keys()) != sorted(obs2.keys()):
             return False

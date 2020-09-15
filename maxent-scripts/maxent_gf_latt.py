@@ -21,8 +21,8 @@ from triqs_maxent.tau_maxent import TauMaxEnt
 from triqs_maxent.omega_meshes import HyperbolicOmegaMesh
 from triqs_maxent.alpha_meshes import LogAlphaMesh
 from triqs_dft_tools.sumk_dft import SumkDFT
-from pytriqs.archive import HDFArchive
-from pytriqs.gf import GfImFreq
+from h5 import HDFArchive
+from triqs.gf import GfImFreq
 
 
 def _read_h5(external_path, iteration=None):

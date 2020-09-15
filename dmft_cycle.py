@@ -13,16 +13,16 @@ import os
 from copy import deepcopy
 
 # triqs
-import pytriqs.utility.mpi as mpi
-from pytriqs.operators.util.U_matrix import (U_matrix, U_matrix_kanamori, reduce_4index_to_2index,
+import triqs.utility.mpi as mpi
+from triqs.operators.util.U_matrix import (U_matrix, U_matrix_kanamori, reduce_4index_to_2index,
                                              U_J_to_radial_integrals, transform_U_matrix)
-from pytriqs.operators.util.hamiltonians import h_int_kanamori, h_int_density, h_int_slater
-from pytriqs.archive import HDFArchive
+from triqs.operators.util.hamiltonians import h_int_kanamori, h_int_density, h_int_slater
+from h5 import HDFArchive
 from triqs_cthyb.solver import Solver
 from triqs_dft_tools.sumk_dft import SumkDFT
-from pytriqs.gf import GfImTime, GfImFreq, GfLegendre, BlockGf, make_hermitian
-from pytriqs.gf.tools import inverse
-from pytriqs.gf.descriptors import Fourier
+from triqs.gf import GfImTime, GfImFreq, GfLegendre, BlockGf, make_hermitian
+from triqs.gf.tools import inverse
+from triqs.gf.descriptors import Fourier
 
 
 # own modules
@@ -362,7 +362,7 @@ def _construct_interaction_hamiltonian(sum_k, general_parameters):
                       + 'WARNING: Each orbital is treated differently. Make sure that the\n'
                       + 'order of input orbitals corresponds to the order in U_matrix, see\n'
                       + 'https://triqs.github.io/triqs/2.1.x/reference/operators/util/U_matrix.html'
-                      + '#pytriqs.operators.util.U_matrix.spherical_to_cubic\n')
+                      + '#triqs.operators.util.U_matrix.spherical_to_cubic\n')
 
                 slater_integrals = U_J_to_radial_integrals(l=2, U_int=general_parameters['U'][icrsh],
                                                            J_hund=general_parameters['J'][icrsh])
@@ -592,10 +592,10 @@ def _determine_dc_and_initial_sigma(general_parameters, advanced_parameters, sum
     # Updates the sum_k object with the Matsubara self-energy
     # Symmetrizes Sigma
     for icrsh in range(sum_k.n_inequiv_shells):
-        sum_k.symm_deg_gf(solvers[icrsh].Sigma_iw, orb=icrsh)
+        sum_k.symm_deg_gf(solvers[icrsh].Sigma_iw, ish=icrsh)
 
     sum_k.put_Sigma([solvers[icrsh].Sigma_iw for icrsh in range(sum_k.n_inequiv_shells)])
-    
+
     return sum_k, solvers
 
 
@@ -908,7 +908,7 @@ def _dmft_steps(iteration_offset, n_iter, sum_k, solvers,
 
         mpi.barrier()
         for icrsh in range(sum_k.n_inequiv_shells):
-            sum_k.symm_deg_gf(solvers[icrsh].Sigma_iw, orb=icrsh)
+            sum_k.symm_deg_gf(solvers[icrsh].Sigma_iw, ish=icrsh)
 
         # Extracts G local
         G_loc_all = sum_k.extract_G_loc()
@@ -934,7 +934,7 @@ def _dmft_steps(iteration_offset, n_iter, sum_k, solvers,
             solvers[icrsh].G0_iw << inverse(solvers[icrsh].Sigma_iw + inverse(solvers[icrsh].G_iw))
 
             solvers[icrsh].G0_iw << make_hermitian(solvers[icrsh].G0_iw)
-            sum_k.symm_deg_gf(solvers[icrsh].G0_iw, orb=icrsh)
+            sum_k.symm_deg_gf(solvers[icrsh].G0_iw, ish=icrsh)
 
             # prepare our G_tau and G_l used to save the 'good' G_tau
             glist_tau = []
@@ -944,7 +944,7 @@ def _dmft_steps(iteration_offset, n_iter, sum_k, solvers,
                                           n_points=solvers[icrsh].n_tau))
 
             # we will call it G_tau_orig to store original G_tau
-            solvers[icrsh].G_tau_orig = BlockGf(name_list=sum_k.gf_struct_solver[icrsh].keys(),
+            solvers[icrsh].G_tau_orig = BlockGf(name_list=list(sum_k.gf_struct_solver[icrsh].keys()),
                                                 block_list=glist_tau, make_copies=True)
 
             if (solver_parameters['measure_G_l']
@@ -955,7 +955,7 @@ def _dmft_steps(iteration_offset, n_iter, sum_k, solvers,
                                               beta=general_parameters['beta'],
                                               n_points=general_parameters['n_LegCoeff']))
 
-                solvers[icrsh].G_l_man = BlockGf(name_list=sum_k.gf_struct_solver[icrsh].keys(),
+                solvers[icrsh].G_l_man = BlockGf(name_list=list(sum_k.gf_struct_solver[icrsh].keys()),
                                                  block_list=glist_l, make_copies=True)
 
 
@@ -1111,7 +1111,7 @@ def _dmft_steps(iteration_offset, n_iter, sum_k, solvers,
 
         # symmetrise Sigma
         for icrsh in range(sum_k.n_inequiv_shells):
-            sum_k.symm_deg_gf(solvers[icrsh].Sigma_iw, orb=icrsh)
+            sum_k.symm_deg_gf(solvers[icrsh].Sigma_iw, ish=icrsh)
 
         # doing the dmft loop and set new sigma into sumk
         sum_k.put_Sigma([solvers[icrsh].Sigma_iw for icrsh in range(sum_k.n_inequiv_shells)])

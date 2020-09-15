@@ -12,11 +12,11 @@
 import numpy as np
 
 # triqs
-import pytriqs.utility.mpi as mpi
-from pytriqs.archive import HDFArchive
+import triqs.utility.mpi as mpi
+from h5 import HDFArchive
 from triqs_dft_tools.converters.plovasp.vaspio import VaspData
-from pytriqs.gf import BlockGf, GfImFreq
-from pytriqs.gf.tools import fit_legendre
+from triqs.gf import BlockGf, GfImFreq
+from triqs.gf.tools import fit_legendre
 
 def store_dft_eigvals(config_file, path_to_h5, iteration):
     """
@@ -368,7 +368,7 @@ def chi_SzSz_setup(sum_k, general_parameters, solver_parameters):
     Sz_list : list of S_op operators to measure per impurity
     """
 
-    from pytriqs.operators.util.observables import S_op
+    from triqs.operators.util.observables import S_op
 
     mpi.report('setting up Chi(Sz,Sz(tau)) measurement')
 

@@ -80,7 +80,7 @@ def test_config_file_1():
     parameters, unnecessary_parameters, missing_required_parameters = _check_if_parameters_used(parameters, default_values_used)
     assert unnecessary_parameters == {'dft': [], 'general': ['n_iter_dmft_per'], 'advanced': [], 'solver': []}
     assert missing_required_parameters == {'dft': [], 'general': ['beta'], 'advanced': [],
-                                           'solver': ['n_warmup_cycles', 'length_cycle', 'n_cycles_tot']}
+                                           'solver': ['length_cycle', 'n_warmup_cycles', 'n_cycles_tot']}
 
     invalid_parameters = _checks_validity_criterion(parameters)
     assert invalid_parameters == {'dft': [], 'general': ['prec_mu'], 'advanced': [], 'solver': []}

@@ -5,9 +5,9 @@ from timeit import default_timer as timer
 import os
 
 # triqs
-import pytriqs.utility.mpi as mpi
-from pytriqs.archive import HDFArchive
-from triqs_dft_tools.converters.vasp_converter import VaspConverter
+import triqs.utility.mpi as mpi
+from h5 import HDFArchive
+from triqs_dft_tools.converters.vasp import VaspConverter
 import triqs_dft_tools.converters.plovasp.converter as plo_converter
 
 

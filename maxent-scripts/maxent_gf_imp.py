@@ -19,7 +19,7 @@ from functools import partial
 from triqs_maxent.elementwise_maxent import PoormanMaxEnt
 from triqs_maxent.omega_meshes import HyperbolicOmegaMesh
 from triqs_maxent.alpha_meshes import LogAlphaMesh
-from pytriqs.archive import HDFArchive
+from h5 import HDFArchive
 
 
 def _read_h5(external_path, iteration=None):

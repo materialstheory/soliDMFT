@@ -197,7 +197,7 @@ dc_J :  float or comma seperated list of floats, optional, default = general_par
 """
 
 from configparser import ConfigParser
-import pytriqs.utility.mpi as mpi
+import triqs.utility.mpi as mpi
 import numpy as np
 
 # Workaround to get the default configparser boolean converter
@@ -221,9 +221,9 @@ PROPERTIES_PARAMS = {'general': {'seedname': {'converter': lambda s: s.replace('
 
                                  'h_int_type': {'converter': int, 'valid for': lambda x, _: x in (1, 2, 3), 'used': True},
 
-                                 'U': {'converter': lambda s: map(float, s.split(',')), 'used': True},
+                                 'U': {'converter': lambda s: list(map(float, s.split(','))), 'used': True},
 
-                                 'J': {'converter': lambda s: map(float, s.split(',')), 'used': True},
+                                 'J': {'converter': lambda s: list(map(float, s.split(','))), 'used': True},
 
                                  'beta': {'converter': float, 'valid for': lambda x, _: x > 0, 'used': True},
 
@@ -262,7 +262,7 @@ PROPERTIES_PARAMS = {'general': {'seedname': {'converter': lambda s: s.replace('
                                               'used': lambda params: not params['general']['csc'], 'default': False},
 
                                  # TODO: add check of length if possible
-                                 'magmom': {'converter': lambda s: map(float, s.split(',')),
+                                 'magmom': {'converter': lambda s: list(map(float, s.split(','))),
                                             'used': lambda params: not params['general']['csc'] and params['general']['magnetic'],
                                             'default': []},
 
@@ -421,14 +421,14 @@ PROPERTIES_PARAMS = {'general': {'seedname': {'converter': lambda s: s.replace('
 
                                   'dc_fixed_value': {'converter': float, 'used': True, 'default': 'none'},
 
-                                  'dc_fixed_occ': {'converter': lambda s: map(float, s.split(',')),
+                                  'dc_fixed_occ': {'converter': lambda s: list(map(float, s.split(','))),
                                                    'used': True, 'default': 'none'},
                                   'dc_nominal': {'converter': BOOL_PARSER, 'used': True, 'default': False},
 
-                                  'dc_U': {'converter': lambda s: map(float, s.split(',')),
+                                  'dc_U': {'converter': lambda s: list(map(float, s.split(','))),
                                            'used': True, 'default': lambda params: params['general']['U']},
 
-                                  'dc_J': {'converter': lambda s: map(float, s.split(',')),
+                                  'dc_J': {'converter': lambda s: list(map(float, s.split(','))),
                                            'used': True, 'default': lambda params: params['general']['J']},
                                  }
                     }
@@ -452,7 +452,7 @@ def _config_find_default_section_entries(config):
     list
         All entries in the default section.
     """
-    return config['DEFAULT'].keys()
+    return list(config['DEFAULT'].keys())
 
 def _config_apply_sections_legacy_name_mapping(config):
     """
@@ -534,7 +534,7 @@ def _config_remove_unused_sections(config):
         All sections that are not supported.
     """
     unused_sections = []
-    for section_name in config.keys():
+    for section_name in list(config.keys()):
         if section_name != 'DEFAULT' and section_name not in PROPERTIES_PARAMS.keys():
             unused_sections.append(section_name)
             config.remove_section(section_name)

@@ -16,7 +16,7 @@ Written by Maximilian Merkel, 2020
 
 import sys
 import numpy as np
-from pytriqs.archive import HDFArchive
+from h5 import HDFArchive
 
 
 def _read_bands(seedname):

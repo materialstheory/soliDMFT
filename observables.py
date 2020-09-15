@@ -11,10 +11,10 @@ import numpy as np
 import os.path
 
 # triqs
-import pytriqs.utility.mpi as mpi
-from pytriqs.gf import GfImTime, Gf, MeshImTime
-from pytriqs.atom_diag import trace_rho_op
-from pytriqs.gf.descriptors import Fourier
+import triqs.utility.mpi as mpi
+from triqs.gf import GfImTime, Gf, MeshImTime
+from triqs.atom_diag import trace_rho_op
+from triqs.gf.descriptors import Fourier
 
 
 import toolset
@@ -479,7 +479,7 @@ def calc_dft_kin_en(general_parameters, sum_k, dft_mu):
     H_ks = sum_k.hopping
     num_kpts = sum_k.n_k
     E_kin = 0.0+0.0j
-    ikarray = np.array(range(sum_k.n_k))
+    ikarray = np.array(list(range(sum_k.n_k)))
     for ik in mpi.slice_array(ikarray):
         nb = int(sum_k.n_orbitals[ik])
         # calculate lattice greens function
@@ -531,7 +531,7 @@ def calc_bandcorr_man(general_parameters, sum_k, E_kin_dft):
     num_kpts = sum_k.n_k
 
     # kinetic energy from dmft lattice Greens functions
-    ikarray = np.array(range(sum_k.n_k))
+    ikarray = np.array(list(range(sum_k.n_k)))
     for ik in mpi.slice_array(ikarray):
         nb = int(sum_k.n_orbitals[ik])
         # calculate lattice greens function

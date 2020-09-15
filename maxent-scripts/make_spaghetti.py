@@ -9,8 +9,8 @@ Created on Fri Jan 31 14:35:31 2020
 import sys
 import numpy as np
 
-from pytriqs.gf import GfReFreq, BlockGf
-from pytriqs.archive import HDFArchive
+from triqs.gf import GfReFreq, BlockGf
+from h5 import HDFArchive
 from triqs_dft_tools.sumk_dft_tools import SumkDFTTools
 
 

@@ -4,7 +4,7 @@
 Contains unit tests for observables.py
 """
 
-from pytriqs.gf import BlockGf, GfImFreq, SemiCircular
+from triqs.gf import BlockGf, GfImFreq, SemiCircular
 
 from observables import add_dft_values_as_zeroth_iteration, _generate_header
 from check_equality import are_iterables_equal
