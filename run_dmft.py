@@ -163,5 +163,13 @@ def main():
         print('-------------------------------')
         print('overall elapsed time: %10.4f seconds'%(global_end-global_start))
 
+
+# Needed for clean kill of mpi job
+def mpiabort_excepthook(type, value, traceback):
+    sys.__excepthook__(type, value, traceback)
+    mpi.MPI.COMM_WORLD.Abort(1)
+
+
 if __name__ == '__main__':
+    sys.excepthook = mpiabort_excepthook
     main()

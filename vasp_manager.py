@@ -100,7 +100,7 @@ def _get_mpi_arguments(cluster_name, mpi_exe, number_cores, vasp_command, hostfi
     # Therefore we need to handover the env variables with -x
     if cluster_name == 'rusty':
         return [mpi_exe, '-hostfile', hostfile, '-np', str(number_cores),
-                '-mca', 'mtl', '^psm2,ofi', '-x', 'LD_LIBRARY_PATH',
+                '-mca', 'mtl', '^psm2,ofi', '-mca', 'btl', '^vader' ,'-x', 'LD_LIBRARY_PATH',
                 '-x', 'PATH', '-x', 'OMP_NUM_THREADS', vasp_command]
 
     if cluster_name == 'daint':

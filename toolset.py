@@ -85,34 +85,27 @@ def check_convergence(sum_k, general_parameters, observables):
         list of std_dev from the last #iterations
 
     """
-    converged = False
     iterations = general_parameters['occ_conv_it']
 
     print('='*60)
-    print('checking covergence of the last '+str(iterations)+' iterations:')
+    print('checking covergence of the last {} iterations:'.format(iterations))
     #loading the observables file
-    avg_occ = []
-    std_dev = []
+    avg_occ = np.empty(sum_k.n_inequiv_shells)
+    std_dev = np.empty(sum_k.n_inequiv_shells)
 
     for icrsh in range(sum_k.n_inequiv_shells):
+        avg_occ[icrsh] = np.mean(np.array(observables['imp_occ'][icrsh]['up'][-iterations:])
+                                 + np.array(observables['imp_occ'][icrsh]['down'][-iterations:]))
 
-        mean = (np.mean(observables['imp_occ'][icrsh]['up'][-iterations:])+
-                np.mean(observables['imp_occ'][icrsh]['down'][-iterations:]))
+        std_dev[icrsh] = np.std(np.array(observables['imp_occ'][icrsh]['up'][-iterations:])
+                                + np.array(observables['imp_occ'][icrsh]['down'][-iterations:]))
 
-        std = (np.std(observables['imp_occ'][icrsh]['up'][-iterations:])+
-               np.std(observables['imp_occ'][icrsh]['down'][-iterations:]))
-
-        avg_occ.append(mean)
-        std_dev.append(std)
-        print('Average occupation of impurity '+str(icrsh)+': {:10.5f}'.format(avg_occ[icrsh]))
-        print('Standard deviation of impurity '+str(icrsh)+': {:10.5f}'.format(std_dev[icrsh]))
-
-    if all(i < general_parameters['occ_conv_crit'] for i in std_dev):
-        converged = True
+        print('Average occupation of impurity {}: {:10.5f}'.format(icrsh, avg_occ[icrsh]))
+        print('Standard deviation of impurity {}: {:10.5f}'.format(icrsh, std_dev[icrsh]))
 
     print('='*60 + '\n')
 
-    return converged, std_dev
+    return np.all(std_dev < general_parameters['occ_conv_crit']), std_dev
 
 def determine_block_structure(sum_k, general_parameters):
     """
@@ -139,10 +132,10 @@ def determine_block_structure(sum_k, general_parameters):
     dens_mat = sum_k.density_matrix(method='using_gf', beta=general_parameters['beta'])
 
     # if we want to do a magnetic calculation we need to lift up/down degeneracy
-    if general_parameters['magnetic']:
+    if not general_parameters['csc'] and general_parameters['magnetic']:
         mpi.report('magnetic calculation: removing the spin degeneracy from the block structure')
         for i, elem in enumerate(dens_mat):
-            for key, value in elem.iteritems():
+            for key, value in elem.items():
                 if key == 'up':
                     for a in range(len(value[:, 0])):
                         for b in range(len(value[0, :])):
@@ -161,12 +154,14 @@ def determine_block_structure(sum_k, general_parameters):
     if general_parameters['enforce_off_diag']:
         mpi.report('enforcing off-diagonal elements in block structure finder')
         for i, elem in enumerate(dens_mat):
-            for key, value in elem.iteritems():
+            for key, value in elem.items():
                 for a in range(len(value[:, 0])):
                     for b in range(len(value[0, :])):
                         if a != b:
                             dens_mat[i][key][a, b] += 0.05
 
+    mpi.report('using 1-particle density matrix and Hloc (atomic levels) to '
+               'determine the block structure')
     sum_k.analyse_block_structure(dm=dens_mat, threshold=general_parameters['block_threshold'])
 
     # Determination of shell_multiplicity
@@ -202,14 +197,14 @@ def print_block_sym(sum_k):
                 print((' '*11 + fmt + '  ' + fmt).format(*row))
         print('\n')
 
-def load_sigma_from_h5(path_to_h5, iteration):
+def load_sigma_from_h5(h5_archive, iteration):
     """
     Reads impurity self-energy for all impurities from file and returns them as a list
 
     Parameters
     ----------
-    path_to_h5 : string
-        path to h5 archive
+    h5_archive : HDFArchive
+        HDFArchive to read from
     iteration : int
         at which iteration will sigma be loaded
 
@@ -227,21 +222,19 @@ def load_sigma_from_h5(path_to_h5, iteration):
     internal_path = 'DMFT_results/'
     internal_path += 'last_iter' if iteration == -1 else 'it_{}'.format(iteration)
 
-    with HDFArchive(path_to_h5, 'r') as archive:
-        n_inequiv_shells = archive['dft_input']['n_inequiv_shells']
+    n_inequiv_shells = h5_archive['dft_input']['n_inequiv_shells']
 
-        # Loads previous self-energies and DC
-        self_energies = [archive[internal_path]['Sigma_iw_{}'.format(iineq)]
-                         for iineq in range(n_inequiv_shells)]
-        dc_imp = archive[internal_path]['DC_pot']
-        dc_energy = archive[internal_path]['DC_energ']
+    # Loads previous self-energies and DC
+    self_energies = [h5_archive[internal_path]['Sigma_iw_{}'.format(iineq)]
+                     for iineq in range(n_inequiv_shells)]
+    dc_imp = h5_archive[internal_path]['DC_pot']
+    dc_energy = h5_archive[internal_path]['DC_energ']
 
-        # Loads density_matrix to recalculate DC if dc_dmft
-        density_matrix = archive[internal_path]['dens_mat_post']
+    # Loads density_matrix to recalculate DC if dc_dmft
+    density_matrix = h5_archive[internal_path]['dens_mat_post']
 
     print('Loaded Sigma_imp0...imp{} '.format(n_inequiv_shells-1)
-          + ('at last it ' if iteration == -1 else 'at it {} '.format(iteration))
-          + 'from {}'.format(path_to_h5))
+          + ('at last it ' if iteration == -1 else 'at it {} '.format(iteration)))
 
     return self_energies, dc_imp, dc_energy, density_matrix
 
@@ -265,7 +258,7 @@ def sumk_sigma_to_solver_struct(sum_k, start_sigma):
 
     Sigma_local = [start_sigma[icrsh].copy() for icrsh in range(sum_k.n_corr_shells)]
     Sigma_inequiv = [BlockGf(name_block_generator=[(block, GfImFreq(indices=inner, mesh=Sigma_local[0].mesh))
-                                                   for block, inner in sum_k.gf_struct_solver[ish].iteritems()],
+                                                   for block, inner in sum_k.gf_struct_solver[ish].items()],
                              make_copies=False) for ish in range(sum_k.n_inequiv_shells)]
 
     # G_loc is rotated to the local coordinate system
@@ -277,7 +270,7 @@ def sumk_sigma_to_solver_struct(sum_k, start_sigma):
 
     # transform to CTQMC blocks
     for ish in range(sum_k.n_inequiv_shells):
-        for block, inner in sum_k.gf_struct_solver[ish].iteritems():
+        for block, inner in sum_k.gf_struct_solver[ish].items():
             for ind1 in inner:
                 for ind2 in inner:
                     block_sumk, ind1_sumk = sum_k.solver_to_sumk[ish][(block, ind1)]

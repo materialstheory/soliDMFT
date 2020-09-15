@@ -80,7 +80,7 @@ def _generate_header(general_parameters, sum_k):
         header_basic_mask = '{{:>3}} | {{:>10}} | {{:>{0}}} | {{:>{0}}} | {{:>17}}'.format(number_spaces)
 
         # If magnetic calculation is done create two obs files per imp
-        if general_parameters['magnetic']:
+        if not general_parameters['csc'] and general_parameters['magnetic']:
             for spin in ('up', 'down'):
                 file_name = 'observables_imp{}_{}.dat'.format(iineq, spin)
                 headers[file_name] = header_basic_mask.format('it', 'mu', 'G(beta/2) per orbital',
@@ -213,7 +213,7 @@ def add_dft_values_as_zeroth_iteration(observables, general_parameters, dft_mu,
 
     # for it 0 we just subtract E_DC from E_DFT
     if general_parameters['calc_energies']:
-        observables['E_tot'].append(E_dft - np.sum(dc_per_imp[0] for dc_per_imp in observables['E_DC']))
+        observables['E_tot'].append(E_dft - sum([dc_per_imp[0] for dc_per_imp in observables['E_DC']]))
     else:
         observables['E_tot'].append('none')
 
@@ -389,7 +389,7 @@ def write_obs(observables, sum_k, general_parameters):
                   for iineq in range(sum_k.n_inequiv_shells)]
 
     for icrsh in range(sum_k.n_inequiv_shells):
-        if general_parameters['magnetic']:
+        if not general_parameters['csc'] and general_parameters['magnetic']:
             for spin in ('up', 'down'):
                 line = '{:3d} | '.format(observables['iteration'][-1])
                 line += '{:10.5f} | '.format(observables['mu'][-1])

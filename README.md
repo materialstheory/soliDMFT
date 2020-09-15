@@ -1,4 +1,4 @@
-# soliDMFT 
+# soliDMFT
 This program allows to perform DFT+DMFT ''one-shot'' and CSC
 calculations from h5 archives or VASP input files for multiband systems using
 the TRIQS package, in combination with the CThyb solver and SumkDFT from
@@ -202,6 +202,7 @@ For a 80 atom unit cell 2 nodes are useful, but for a 20 atom unit cell not at a
 
 ## LOCPROJ bug for individual projections:
 
+Example use of LOCPROJ for t2g manifold of SrVO3 (the order of the orbitals seems to be mixed up... this example leads to x^2 -y^2, z^2, yz... )
 In the current version there is some mix up in the mapping between selected orbitals in the INCAR and actual selected in the LOCPROJ. This is 
 what the software does (left side is INCAR, right side is resulting in the LOCPROJ)
 
@@ -212,13 +213,13 @@ what the software does (left side is INCAR, right side is resulting in the LOCPR
 * z2 -> xy
 
 ```
-LOCPROJ = 2 : dxz : Pr 
-LOCPROJ = 2 : dx2-y2 : Pr
-LOCPROJ = 2 : dz2 : Pr 
+LOCPROJ = 2 : dxz : Pr 1
+LOCPROJ = 2 : dx2-y2 : Pr 1
+LOCPROJ = 2 : dz2 : Pr 1
 ```
 However, if the complete d manifold is chosen, the usual VASP order (xy, yz, z2, xz, x2-y2) is obtained in the LOCPROJ. This is done as shown below
 ```
-LOCPROJ = 2 : d : Pr
+LOCPROJ = 2 : d : Pr 1
 ```
 
 ## convergence of projectors with Vasp
@@ -239,6 +240,43 @@ DAV:  31    -0.394760088659E+02    0.39472E-09    0.35516E-13 132366   0.110E-10
 ```
 The total energy is lower as well. But more importantly the second calculation produces well converged projectors preserving symmetries way better, with less off-diagonal elements in Gloc, making it way easier for the solver. Always pay attention to rms.
 
+
+## orbital order in the W90 converter
+
+Some interaction Hamiltonians are sensitive to the order of orbitals (i.e. density-density or Slater Hamiltonian), others are invariant under rotations in orbital space (i.e. the Kanamori Hamiltonian).
+For the former class and W90-based DMFT calculations, we need to be careful because the order of W90 (z^2, xz, yz, x^2-y^2, xy) is different from the order expected by TRIQS (xy, yz, z^2, xz, x^2-y^2).
+Therefore, we need to specify the order of orbitals in the projections block (example for Pbnm or P21/n cell, full d shell):
+```
+begin projections
+# site 0
+f=0.5,0.0,0.0:dxy
+f=0.5,0.0,0.0:dyz
+f=0.5,0.0,0.0:dz2
+f=0.5,0.0,0.0:dxz
+f=0.5,0.0,0.0:dx2-y2
+# site 1
+f=0.5,0.0,0.5:dxy
+f=0.5,0.0,0.5:dyz
+f=0.5,0.0,0.5:dz2
+f=0.5,0.0,0.5:dxz
+f=0.5,0.0,0.5:dx2-y2
+# site 2
+f=0.0,0.5,0.0:dxy
+f=0.0,0.5,0.0:dyz
+f=0.0,0.5,0.0:dz2
+f=0.0,0.5,0.0:dxz
+f=0.0,0.5,0.0:dx2-y2
+# site 3
+f=0.0,0.5,0.5:dxy
+f=0.0,0.5,0.5:dyz
+f=0.0,0.5,0.5:dz2
+f=0.0,0.5,0.5:dxz
+f=0.0,0.5,0.5:dx2-y2
+end projections
+```
+Warning: simply using `Fe:dxy,dyz,dz2,dxz,dx2-y2` does not work, VASP/W90 brings the d orbitals back to W90 standard order.
+
+The 45-degree rotation for the sqrt2 x sqrt2 x 2 cell can be ignored because the interaction Hamiltonian is invariant under swapping x^2-y^2 and xy.
 
 
 ## remarks on the Vasp version
