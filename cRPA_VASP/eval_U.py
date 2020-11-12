@@ -47,7 +47,6 @@ def red_to_2ind(uijkl,n_sites,n_orb,out=False):
     '''
     reduces the 4index coulomb matrix to a 2index matrix and
     follows the procedure given in PRB96 seth,peil,georges:
-    m = ii , m'=jj
     U_antipar = U_mm'^oo' = U_mm'mm' (Coulomb Int)
     U_par = U_mm'^oo = U_mm'mm' - U_mm'm'm (for intersite interaction)
     U_ijij (Hunds coupling)
@@ -65,8 +64,8 @@ def red_to_2ind(uijkl,n_sites,n_orb,out=False):
     __Returns:__
     Uij_anti : numpy array
         red 2 index matrix U_mm'mm'
-    Uijij : numpy array
-        red 2 index matrix U_ijij (Hunds coupling)
+    Uiijj : numpy array
+        red 2 index matrix U_iijj
     Uijji : numpy array
         red 2 index matrix Uijji
     Uij_par : numpy array
@@ -77,26 +76,26 @@ def red_to_2ind(uijkl,n_sites,n_orb,out=False):
     # create 2 index matrix
     Uij_anti = np.zeros((dim, dim))
     Uij_par = np.zeros((dim, dim))
-    Uijij = np.zeros((dim, dim))
+    Uiijj = np.zeros((dim, dim))
     Uijji = np.zeros((dim, dim))
 
-    for i in range(0,n_orb*n_sites):
-        for j in range(0,n_orb*n_sites):
+    for i in range(0,dim):
+        for j in range(0,dim):
             # the indices in VASP are switched: U_ijkl ---VASP--> U_ikjl
-            Uij_anti[i,j] = uijkl[i,j,i,j]
-            Uijij[i,j] =  uijkl[i,i,j,j]
-            Uijji[i,j] = uijkl[i,j,j,i]
+            Uij_anti[i,j] = uijkl[i,i,j,j]
             Uij_par[i,j] = uijkl[i,i,j,j]-uijkl[i,j,j,i]
+            Uiijj[i,j] =  uijkl[i,j,i,j]
+            Uijji[i,j] = uijkl[i,j,j,i]
 
     np.set_printoptions(precision=3,suppress=True)
 
     if out:
         print( 'reduced U anti-parallel = U_mm\'\^oo\' = U_mm\'mm\' matrix : \n', Uij_anti)
-        print( 'reduced Uijij : \n', Uijij)
-        print( 'reduced Uijji : \n', Uijji)
         print('reduced U parallel = U_mm\'\^oo = U_mm\'mm\' - U_mm\'m\'m matrix : \n', Uij_par)
+        print( 'reduced Uijji : \n', Uijji)
+        print( 'reduced Uiijj : \n', Uiijj)
 
-    return Uij_anti,Uijij,Uijji,Uij_par
+    return Uij_anti,Uiijj,Uijji,Uij_par
 
 
 def calc_kan_params(uijkl,n_sites,n_orb,out=False):
@@ -149,9 +148,9 @@ def calc_kan_params(uijkl,n_sites,n_orb,out=False):
     int_params['J'] = J
 
     if out:
-        print 'U= ', "{:.4f}".format(U)
-        print 'U\'= ', "{:.4f}".format(Uprime)
-        print 'J= ', "{:.4f}".format(J)
+        print('U= ', "{:.4f}".format(U))
+        print('U\'= ', "{:.4f}".format(Uprime))
+        print('J= ', "{:.4f}".format(J))
 
     return int_params
 
@@ -183,10 +182,9 @@ def calc_u_avg_fulld(uijkl,n_sites,n_orb,out=False):
 
     int_params = collections.OrderedDict()
     dim = n_sites*n_orb
-    Uij_anti,Uijij,Uijji,Uij_par = red_to_2ind(uijkl,n_sites,n_orb,out=out)
+    Uij_anti,Uiijj,Uijji,Uij_par = red_to_2ind(uijkl,n_sites,n_orb,out=out)
     # U_antipar = U_mm'^oo' = U_mm'mm' (Coulomb Int)
     # U_par = U_mm'^oo = U_mm'mm' - U_mm'm'm (for intersite interaction)
-    # U_ijij (Hunds coupling)
     # here we assume cubic harmonics (real harmonics) as basis functions in the order
     # dz2 dxz dyz dx2-y2 dxy
     # triqs basis: basis ordered as (xy,yz,z^2,xz,x^2-y^2)
@@ -254,16 +252,16 @@ def calculate_interaction_from_averaging(uijkl, n_sites, n_orb, out=False):
     l = 2
 
     dim = n_sites*n_orb
-    Uij_anti,Uijij,Uijji,Uij_par = red_to_2ind(uijkl,n_sites,n_orb,out=out)
+    Uij_anti,Uiijj,Uijji,Uij_par = red_to_2ind(uijkl,n_sites,n_orb,out=out)
 
     # Calculates Slater-averaged parameters directly
     U = [None] * n_sites
     J = [None] * n_sites
     for impurity in range(n_sites):
-        u_ijij_imp = Uijij[impurity*n_orb:(impurity+1)*n_orb, impurity*n_orb:(impurity+1)*n_orb]
+        u_ijij_imp = Uij_anti[impurity*n_orb:(impurity+1)*n_orb, impurity*n_orb:(impurity+1)*n_orb]
         U[impurity] = np.mean(u_ijij_imp)
 
-        u_iijj_imp = Uij_anti[impurity*n_orb:(impurity+1)*n_orb, impurity*n_orb:(impurity+1)*n_orb]
+        u_iijj_imp = Uiijj[impurity*n_orb:(impurity+1)*n_orb, impurity*n_orb:(impurity+1)*n_orb]
         J[impurity] = np.sum(u_iijj_imp) / (2*l*(2*l+1)) - U[impurity] / (2*l)
     U = np.mean(U)
     J = np.mean(J)
@@ -281,7 +279,7 @@ def fit_slater_fulld(uijkl,n_sites,U_init,J_init):
     assumes F2/F4=0.625
     '''
 
-    from pytriqs.operators.util.U_matrix import U_matrix, reduce_4index_to_2index
+    from triqs.operators.util.U_matrix import U_matrix, reduce_4index_to_2index
     from scipy.optimize import minimize
     # transform U matrix orbital basis ijkl to nmop, note the last two indices need to be switched in the T matrices
     def transformU(U_matrix, T):
@@ -293,9 +291,9 @@ def fit_slater_fulld(uijkl,n_sites,U_init,J_init):
         Umat_full = transformU(Umat_full, rot_def_to_w90)
 
         Umat, Upmat = reduce_4index_to_2index(Umat_full)
-        u_iijj_crpa = Uij_anti[:5,:5]
+        u_iijj_crpa = Uiijj[:5,:5]
         u_iijj_slater = Upmat - Umat
-        u_ijij_crpa = Uijij[:5,:5]
+        u_ijij_crpa = Uij_anti[:5,:5]
         u_ijij_slater = Upmat
         return np.sum((u_iijj_crpa - u_iijj_slater)**2 + (u_ijij_crpa - u_ijij_slater)**2)
 
@@ -308,7 +306,7 @@ def fit_slater_fulld(uijkl,n_sites,U_init,J_init):
                                [0, 1, 0, 0, 0],
                                [0, 0, 0, 1, 0]])
 
-    Uij_anti,Uijij,Uijji,Uij_par = red_to_2ind(uijkl,n_sites,n_orb=5,out=False)
+    Uij_anti,Uiijj,Uijji,Uij_par = red_to_2ind(uijkl,n_sites,n_orb=5,out=False)
 
 
     result = minimize(minimizer, (U_init,J_init))
@@ -318,3 +316,13 @@ def fit_slater_fulld(uijkl,n_sites,U_init,J_init):
     print('Final results from fit: U = {:.3f} eV, J = {:.3f} eV'.format(U_int, J_hund))
 
     return U_int, J_hund
+
+# example for a five orbital model
+# uijkl=read_uijkl('UIJKL',1,5)
+# calc_u_avg_fulld(uijkl,n_sites=1,n_orb=5,out=True)
+# fit_slater_fulld(uijkl,1,3,1)
+# calculate_interaction_from_averaging(uijkl, 1, 5, out=True)
+
+# example for 3 orbital kanamori
+# uijkl=read_uijkl('UIJKL',1,3)
+# calc_kan_params(uijkl,1,3,out=True)
