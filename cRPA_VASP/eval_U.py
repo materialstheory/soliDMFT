@@ -276,7 +276,7 @@ def fit_slater_fulld(uijkl,n_sites,U_init,J_init):
     '''
     finds best Slater parameters U, J for given Uijkl tensor
     using the triqs U_matrix operator routine
-    assumes F2/F4=0.625
+    assumes F4/F2=0.625
     '''
 
     from triqs.operators.util.U_matrix import U_matrix, reduce_4index_to_2index
