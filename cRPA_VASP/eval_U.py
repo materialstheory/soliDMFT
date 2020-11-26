@@ -272,7 +272,7 @@ def calculate_interaction_from_averaging(uijkl, n_sites, n_orb, out=False):
 
     return U, J
 
-def fit_slater_fulld(uijkl,n_sites,U_init,J_init):
+def fit_slater_fulld(uijkl,n_sites,U_init,J_init,fixed_F4_F2= True):
     '''
     finds best Slater parameters U, J for given Uijkl tensor
     using the triqs U_matrix operator routine
@@ -297,6 +297,18 @@ def fit_slater_fulld(uijkl,n_sites,U_init,J_init):
         u_ijij_slater = Upmat
         return np.sum((u_iijj_crpa - u_iijj_slater)**2 + (u_ijij_crpa - u_ijij_slater)**2)
 
+    def minimizer_radial(parameters):
+        F0, F2, F4 = parameters
+        Umat_full = U_matrix(l=2, radial_integrals=[F0,F2,F4], basis='cubic')
+        Umat_full = transformU(Umat_full, rot_def_to_w90)
+
+        Umat, Upmat = reduce_4index_to_2index(Umat_full)
+        u_iijj_crpa = Uiijj[:5,:5]
+        u_iijj_slater = Upmat - Umat
+        u_ijij_crpa = Uij_anti[:5,:5]
+        u_ijij_slater = Upmat
+        return np.sum((u_iijj_crpa - u_iijj_slater)**2 + (u_ijij_crpa - u_ijij_slater)**2)
+
     # rot triqs d basis to w90 default basis!
     # check your order of orbitals assuming:
     # dz2, dxz, dyz, dx2-y2, dxy
@@ -308,20 +320,44 @@ def fit_slater_fulld(uijkl,n_sites,U_init,J_init):
 
     Uij_anti,Uiijj,Uijji,Uij_par = red_to_2ind(uijkl,n_sites,n_orb=5,out=False)
 
+    if fixed_F4_F2:
+        result = minimize(minimizer, (U_init,J_init))
 
-    result = minimize(minimizer, (U_init,J_init))
+        U_int, J_hund = result.x
+        print('Final results from fit: U = {:.3f} eV, J = {:.3f} eV'.format(U_int, J_hund))
+        print('optimize error', result.fun)
+    else:
+        # start with 0.63 as guess
+        F0 = U_init
+        F2 = J_init * 14.0 / (1.0 + 0.63)
+        F4 = 0.630 * F2
 
+        initial_guess = (F0, F2, F4)
 
-    U_int, J_hund = result.x
-    print('Final results from fit: U = {:.3f} eV, J = {:.3f} eV'.format(U_int, J_hund))
+        print('Initial guess: F0 = {0[0]:.3f} eV, F2 = {0[1]:.3f} eV, F4 = {0[2]:.3f} eV'.format(initial_guess))
+
+        result = minimize(minimizer_radial, initial_guess)
+        F0, F2, F4 = result.x
+        print('Final results from fit: F0 = {:.3f} eV, F2 = {:.3f} eV, F4 = {:.3f} eV'.format(F0, F2, F4))
+        print('(F2+F4)/14 = {:.3f} eV'.format((F2+F4)/14))
+        print('F4/F2 = {:.3f} eV'.format(F4/F2))
+        print('optimize error', result.fun)
+        U_int = F0
+        J_hund = (F2+F4)/14
+
 
     return U_int, J_hund
 
 # example for a five orbital model
 # uijkl=read_uijkl('UIJKL',1,5)
 # calc_u_avg_fulld(uijkl,n_sites=1,n_orb=5,out=True)
-# fit_slater_fulld(uijkl,1,3,1)
+# print('now via fitting with fixed F4/F2=0.63 ratio')
+# fit_slater_fulld(uijkl,1,3,1, fixed_F4_F2 = True)
+# print('now directly fitting F0,F2,F4')
+# fit_slater_fulld(uijkl,1,3,1, fixed_F4_F2 = False)
+
 # calculate_interaction_from_averaging(uijkl, 1, 5, out=True)
+
 
 # example for 3 orbital kanamori
 # uijkl=read_uijkl('UIJKL',1,3)
