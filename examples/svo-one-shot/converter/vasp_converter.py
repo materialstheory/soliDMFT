@@ -10,7 +10,7 @@ import cmath
 
 from triqs_dft_tools.sumk_dft import *
 from triqs_dft_tools.sumk_dft_tools import *
-from triqs_dft_tools.converters.vasp_converter import *
+from triqs_dft_tools.converters.vasp import *
 from triqs_dft_tools.converters.plovasp.vaspio import VaspData
 from triqs_dft_tools.converters.plovasp.plotools import generate_plo, output_as_text
 import triqs_dft_tools.converters.plovasp.converter as plo_converter

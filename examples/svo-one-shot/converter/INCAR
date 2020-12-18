@@ -11,7 +11,7 @@ EDIFF = 1.E-10
 !! DOS energy window
 NEDOS = 1001
 !! Smearing procedure
-ISMEAR = -5
+ISMEAR = 2
 ! -4 (-5) Tetrahedron (with Bloechl), 0 Gaussian, 1,... Methfessel-Paxton
 SIGMA=0.01
 !! real/reci projection scheme
@@ -32,4 +32,4 @@ LOCPROJ = 2 : d : Pr
 
 !! write WAVECAR, CHGCAR
 LWAVE = .FALSE.
-LCHARG = .TRUE.
+LCHARG = .FALSE.
