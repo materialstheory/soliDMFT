@@ -55,7 +55,11 @@ def _read_h5(external_path, iteration=None):
         sigma_iw = [archive[h5_internal_path][p] for p in impurity_paths]
 
         dc_energy = archive[h5_internal_path]['DC_energ']
-        chemical_potential = archive[h5_internal_path]['chemical_potential']
+        if 'chemical_potential_post' in archive[h5_internal_path]:
+            chemical_potential = archive[h5_internal_path]['chemical_potential_post']
+        else:
+            # Old name for chemical_potential_post
+            chemical_potential = archive[h5_internal_path]['chemical_potential']
 
     return sigma_iw, dc_energy, chemical_potential
 
@@ -78,8 +82,8 @@ def _create_sigma_continuators(sigma_iw, dc_energy, chemical_potential):
                                                                 + chemical_potential)
                                  for key, block_GF in imp_GF} for imp_GF in sigma_iw]
 
-    direct_continuator = None #[{key: DirectSigmaContinuator(block_GF) for key, block_GF in imp_GF}
-                          #for imp_GF in sigma_iw]
+    direct_continuator = [{key: DirectSigmaContinuator(block_GF) for key, block_GF in imp_GF}
+                          for imp_GF in sigma_iw]
 
     return {'inversion_continuator_dc': inversion_continuator_dc,
             'inversion_continuator_mu': inversion_continuator_mu,
@@ -157,14 +161,14 @@ def main(external_path, iteration=None):
                                                    chemical_potential)['inversion_continuator_dc']
     print('Starting run of maxent now.')
     results = _run_maxent(sigma_continuator)
-    print('Extracting Sigma(omega) now.')
+    print(u'Extracting Σ(ω) now. This might take a while.')
     sigma_w = _get_sigma_omega_from_aux_spectral(sigma_continuator, results)
     print('Writing results to h5 archive now.')
     _write_sigma_omega_to_h5(sigma_w, external_path, iteration)
-    print('Finished writing Sigma(omega) to archive.')
+    print(u'Finished writing Σ(ω) to archive.')
 
     total_time = time.time() - start_time
-    print('The program took {:.0f} s.'.format(total_time))
+    print('Run time: {:.0f} s.'.format(total_time))
     return sigma_w
 
 

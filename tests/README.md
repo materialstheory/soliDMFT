@@ -11,6 +11,11 @@ Inside the docker (or any environment with the triqs libraries and pytest) and f
 pytest will find every file starting with "test" and execute every function in there that itself starts with "test".
 Therefore, every function starting with "test" has to contain one or multiple standalone tests, including setup of input parameters and checking output with the `assert` keyword.
 
+You can run a single test, for example the test `test_add_dft_values_one_impurity_one_band` in `test_observables.py`,  by going to the main directory and execute it as:
+```
+python -m pytest tests/test_observables.py::test_add_dft_values_one_impurity_one_band
+```
+
 Notes:
 
 * When developing code, please write tests as soon as you know what a function is supposed to do.

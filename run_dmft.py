@@ -9,12 +9,6 @@ Written by Alexander Hampel, Sophie Beck
 Materials Theory, ETH Zurich,
 """
 
-# the future numpy (>1.15) is not fully compatible with triqs 2.0 atm
-# suppress warnings
-import warnings
-warnings.simplefilter(action='ignore', category=FutureWarning)
-#warnings.filterwarnings('ignore')
-
 # system
 import os
 import sys
@@ -27,7 +21,6 @@ from h5 import HDFArchive
 
 # own modules
 from read_config import read_config
-from observables import prep_observables
 from dmft_cycle import dmft_cycle
 from csc_flow import csc_flow_control
 
@@ -132,7 +125,7 @@ def main():
             # basic H5 archive checks and setup
             if mpi.is_master_node():
                 h5_archive = HDFArchive(general_parameters['jobname']+'/'+general_parameters['seedname']+'.h5', 'a')
-                if not 'DMFT_results' in h5_archive:
+                if 'DMFT_results' not in h5_archive:
                     h5_archive.create_group('DMFT_results')
                 if 'last_iter' in h5_archive['DMFT_results']:
                     prev_iterations = h5_archive['DMFT_results']['iteration_count']
@@ -141,21 +134,15 @@ def main():
                 else:
                     h5_archive['DMFT_results'].create_group('last_iter')
                     general_parameters['prev_iterations'] = 0
-                if not 'DMFT_input' in h5_archive:
+                if 'DMFT_input' not in h5_archive:
                     h5_archive.create_group('DMFT_input')
                     h5_archive['DMFT_input'].create_group('solver')
 
             general_parameters = mpi.bcast(general_parameters)
 
-            # prepare observable dicts and files, which is stored on the master node
-            observables = dict()
-            if mpi.is_master_node():
-                observables = prep_observables(h5_archive)
-            observables = mpi.bcast(observables)
-
             ############################################################
             # run the dmft_cycle
-            observables = dmft_cycle(general_parameters, solver_parameters, advanced_parameters, observables)
+            dmft_cycle(general_parameters, solver_parameters, advanced_parameters)
             ############################################################
 
     if mpi.is_master_node():

@@ -13,7 +13,7 @@ from read_config import (_convert_parameters, _find_nonexistent_parameters,
                          _apply_default_values, _check_if_parameters_used,
                          _checks_validity_criterion)
 
-from check_equality import are_iterables_equal
+from helper import are_iterables_equal
 
 CONFIG_FILE_1 = u'''
 [general]
@@ -25,7 +25,7 @@ set_rot = none
 
 prec_mu = -0.001
 
-h_int_type = 1
+h_int_type =    density_density
 U = 2.0
 J = 2.0
 
@@ -99,11 +99,12 @@ def test_config_file_1():
                                                         'J': [2.0], 'h5_save_freq': 5,
                                                         'dc': True, 'jobname': [u'out_DMFT_fancy'],
                                                         'n_iter_dmft': 4, 'U': [2.0],
+                                                        'energy_shift_orbitals': 'none',
                                                         'measure_chi_insertions': 100, 'h_field': 0.0,
                                                         'calc_energies': True, 'sigma_mix': 0.7,
                                                         'dc_type': 0, 'load_sigma': False,
                                                         'noise_level_initial_sigma': 0.,
-                                                        'h_int_type': 1, 'spin_names': ['up', 'down']},
+                                                        'h_int_type': 'density_density'},
                                             'advanced': {'dc_fixed_value': 'none', 'dc_fixed_occ': 'none',
                                                          'dc_nominal': False,
                                                          'dc_factor': 'none', 'dc_J': [2.0], 'dc_U': [2.0]},
@@ -126,11 +127,12 @@ set_rot = none
 
 prec_mu = 0.001
 
-h_int_type = 1
+h_int_type = kanamori
 U = 5.5
 J = 1.0
 
 beta = 40
+energy_shift_orbitals = 2*%(U)s, 0, 3.8*%(J)s + %(U)s, 2.1
 
 n_iter_dmft = 6
 
@@ -213,12 +215,13 @@ def test_config_file_2():
                                                         'occ_conv_crit': -1, 'J': [1.0], 'h5_save_freq': 2,
                                                         'dc': True, 'jobname': [u'out_60M_afm'],
                                                         'beta': 40.0, 'U': [5.5],
+                                                        'energy_shift_orbitals': [11, 0, 9.3, 2.1],
                                                         'measure_chi_insertions': 100, 'h_field': 0.0,
                                                         'calc_energies': False, 'sigma_mix': 0.6,
                                                         'magmom': [1.0, -1.0], 'dc_type': 0,
                                                         'load_sigma': False,
                                                         'noise_level_initial_sigma': 0., 'n_iter_dmft': 6,
-                                                        'h_int_type': 1, 'spin_names': ['up', 'down']},
+                                                        'h_int_type': 'kanamori'},
                                             'advanced': {'dc_fixed_value': 'none', 'dc_fixed_occ': 'none',
                                                          'dc_nominal': False,
                                                          'dc_factor': 'none', 'dc_J': [1.0], 'dc_U': [5.5]},

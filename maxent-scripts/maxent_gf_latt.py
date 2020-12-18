@@ -39,7 +39,11 @@ def _read_h5(external_path, iteration=None):
 
         sigma_iw = [archive[h5_internal_path][p] for p in impurity_paths]
 
-        chemical_potential = archive[h5_internal_path]['chemical_potential']
+        if 'chemical_potential_post' in archive[h5_internal_path]:
+            chemical_potential = archive[h5_internal_path]['chemical_potential_post']
+        else:
+            # Old name for chemical_potential_post
+            chemical_potential = archive[h5_internal_path]['chemical_potential']
         dc_energy = archive[h5_internal_path]['DC_energ']
         dc_potential = archive[h5_internal_path]['DC_pot']
     return sigma_iw, chemical_potential, dc_energy, dc_potential
@@ -84,7 +88,7 @@ def _get_nondegenerate_greens_functions(spins_degenerate, block, block_gf):
     return block_gf[block]
 
 
-def _run_maxent(gf_imp_tau, spins_degenerate, include_offdiag=False, maxent_error=.03):
+def _run_maxent(gf_latt_iw, sum_k, spins_degenerate, maxent_error=.03):
     """
     Runs maxent to get the spectral function from the list of block GF.
     If spins_degenerate, pairs with the same name except up<->down switched
@@ -94,34 +98,30 @@ def _run_maxent(gf_imp_tau, spins_degenerate, include_offdiag=False, maxent_erro
     results = {}
 
     # Prints information on the blocks found
-    print('Found blocks {}'.format(list(gf_imp_tau.indices)))
-    for block in gf_imp_tau.indices:
+    print('Found blocks {}'.format(list(gf_latt_iw.indices)))
+    for block in gf_latt_iw.indices:
         # Checks if gf is part of a degenerate pair
-        gf = _get_nondegenerate_greens_functions(spins_degenerate, block, gf_imp_tau)
+        gf = _get_nondegenerate_greens_functions(spins_degenerate, block, gf_latt_iw)
         if gf is None:
             results[block] = None
             continue
 
-        if include_offdiag:
-            # Initializes and runs the maxent solver
-            solver = PoormanMaxEnt(use_complex=True)
-            solver.set_G_iw(gf)
-            solver.set_error(maxent_error)
-            solver.omega = HyperbolicOmegaMesh(omega_min=-20, omega_max=20, n_points=160)
-            solver.alpha_mesh = LogAlphaMesh(alpha_min=1e-4, alpha_max=1e2, n_points=50)
-            results[block] = solver.run()
-        else:
-            gf = [GfImFreq(mesh=gf.mesh, data=gf.data[:, i, i]) for i in range(gf.data.shape[1])]
-            results[block] = [None] * len(gf)
-            for i, gf_entry in enumerate(gf):
-                print('Calling MaxEnt for element {0} {0}'.format(i))
-                # Initializes and runs the maxent solver
-                solver = TauMaxEnt()
-                solver.set_G_iw(gf_entry)
-                solver.set_error(maxent_error)
-                solver.omega = HyperbolicOmegaMesh(omega_min=-20, omega_max=20, n_points=160)
-                solver.alpha_mesh = LogAlphaMesh(alpha_min=1e-4, alpha_max=1e2, n_points=50)
-                results[block][i] = solver.run()
+        # Take trace of lattice GF. Individual entries do not make sense
+        # because the KS Hamiltonian ususally has the bands sorted by energy
+        gf = GfImFreq(mesh=gf.mesh, data=np.trace(gf.data, axis1=1, axis2=2))
+        # Initializes and runs the maxent solver
+        num_ks_orbitals = sum_k.hopping.shape[2]
+        # Gets maximal entry on the diagonal of the hopping matrix
+        hopping_max = np.max(np.abs(sum_k.hopping[:, :, np.arange(num_ks_orbitals), np.arange(num_ks_orbitals)]
+                                    - sum_k.chemical_potential))
+        omega_limit = max(20, hopping_max+2)
+        print('Calling MaxEnt with omega in +- {:.3f} eV'.format(omega_limit))
+        solver = TauMaxEnt()
+        solver.set_G_iw(gf)
+        solver.set_error(maxent_error)
+        solver.omega = HyperbolicOmegaMesh(omega_min=-omega_limit, omega_max=omega_limit, n_points=int(8*omega_limit))
+        solver.alpha_mesh = LogAlphaMesh(alpha_min=1e-4, alpha_max=1e2, n_points=50)
+        results[block] = solver.run()
 
     # Assign up's solution to down result for degenerate calculations
     for key in results:
@@ -131,21 +131,14 @@ def _run_maxent(gf_imp_tau, spins_degenerate, include_offdiag=False, maxent_erro
     return results
 
 
-def _unpack_maxent_results(results, include_offdiag=False):
+def _unpack_maxent_results(results):
     """ Converts maxent result to impurity list of dict with mesh and spectral function from each analyzer """
-    if include_offdiag:
-        mesh = {key: np.array(r.omega) for key, r in results.items()}
-        data_linefit = {key: r.get_A_out('LineFitAnalyzer') for key, r in results.items()}
-        data_chi2 = {key: r.get_A_out('Chi2CurvatureAnalyzer') for key, r in results.items()}
-    else:
-        mesh = {key: np.array(r[0].omega) for key, r in results.items()}
-        data_linefit = {}
-        data_chi2 = {}
-        for key, result in results.items():
-            data_linefit[key] = np.transpose([s.get_A_out('LineFitAnalyzer') for s in result])
-            data_linefit[key] = np.transpose([np.diag(d) for d in data_linefit[key]], axes=(1, 2, 0))
-            data_chi2[key] = np.transpose([s.get_A_out('Chi2CurvatureAnalyzer') for s in result])
-            data_chi2[key] = np.transpose([np.diag(d) for d in data_chi2[key]], axes=(1, 2, 0))
+    mesh = {key: np.array(r.omega) for key, r in results.items()}
+    data_linefit = {}
+    data_chi2 = {}
+    for key, result in results.items():
+        data_linefit[key] = result.get_A_out('LineFitAnalyzer')
+        data_chi2[key] = result.get_A_out('Chi2CurvatureAnalyzer')
 
     data_per_impurity = {'mesh': mesh, 'Alatt_w_line_fit': data_linefit,
                          'Alatt_w_chi2_curvature': data_chi2}
@@ -162,13 +155,13 @@ def _write_spectral_function_to_h5(unpacked_results, external_path, iteration=No
         archive[h5_internal_path]['Alatt_w'] = unpacked_results
 
 
-def main(external_path, iteration=None, read_g_latt_iw=False, include_offdiag=False):
+def main(external_path, iteration=None, read_g_latt_iw=False):
     """
     Main function that reads the lattice Greens function from h5, analytically
     continues it and writes the result back to the h5 archive.
-    Currently uses only the diagonal elements of the lattice because the memory
-    consumption is too high otherwise. Off-diagonal elements can be included with
-    the parameter include_offdiag.
+    Only the trace is used because the Kohn-Sham energies ("hopping") are not
+    sorted by "orbital" but by energy, leading to crossovers which can confuse
+    MaxEnt.
 
     Parameters
     ----------
@@ -176,8 +169,6 @@ def main(external_path, iteration=None, read_g_latt_iw=False, include_offdiag=Fa
     iteration: int/string, optional, iteration to read from and write to
     read_g_latt_iw: bool, optional, reads G_latt from the h5 instead of
         generating it from Sigma(i omega). Only works if this code has run before
-    include_offdiag: bool, optional, includes off-diagonal elements of the
-        lattice GF
     Returns
     -------
     list of dict, per impurity: dict containing the omega mesh
@@ -198,7 +189,7 @@ def main(external_path, iteration=None, read_g_latt_iw=False, include_offdiag=Fa
         _write_lattice_gf_to_h5(gf_lattice_iw, external_path, iteration)
         print('Generated the lattice GF. Starting maxent now.')
 
-    maxent_results = _run_maxent(gf_lattice_iw, True, include_offdiag=include_offdiag)
+    maxent_results = _run_maxent(gf_lattice_iw, sum_k, True)
     unpacked_results = _unpack_maxent_results(maxent_results)
     _write_spectral_function_to_h5(unpacked_results, external_path, iteration)
 

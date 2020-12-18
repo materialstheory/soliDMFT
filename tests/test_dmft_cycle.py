@@ -6,7 +6,7 @@ Contains unit tests for dmft_cycle
 
 import numpy as np
 from dmft_cycle import _mix_chemical_potential, _determine_afm_mapping
-from check_equality import are_iterables_equal
+from helper import are_iterables_equal
 
 def test_mix_chemical_potential():
     general_parameters = {'mu_mix_const': 0, 'mu_mix_per_occupation_offset': 1}

@@ -1,22 +1,55 @@
-# contains the CSC flow control functions
+"""
+contains the CSC flow control functions
+"""
 
 import time
 from timeit import default_timer as timer
-import os
+import subprocess
+import shlex
+import os.path
 
 # triqs
-import triqs.utility.mpi as mpi
 from h5 import HDFArchive
+import triqs.utility.mpi as mpi
 from triqs_dft_tools.converters.vasp import VaspConverter
 import triqs_dft_tools.converters.plovasp.converter as plo_converter
+from triqs_dft_tools.converters.wannier90 import Wannier90Converter
 
-
-#from observables import *
-from observables import prep_observables
 import toolset
 from dmft_cycle import dmft_cycle
 import vasp_manager as vasp
 
+_WANNIER_SEEDNAME = 'wannier90'
+
+def _run_plo_converter(general_parameters):
+    # Checks for plo file for projectors
+    if not os.path.exists(general_parameters['plo_cfg']):
+        print('*** Input PLO config file not found! '
+              + 'I was looking for {} ***'.format(general_parameters['plo_cfg']))
+        mpi.MPI.COMM_WORLD.Abort(1)
+
+    # Runs plo converter
+    plo_converter.generate_and_output_as_text(general_parameters['plo_cfg'], vasp_dir='./')
+    # Writes new H(k) to h5 archive
+    converter = VaspConverter(filename=general_parameters['seedname'])
+    converter.convert_dft_input()
+
+def _run_wannier_converter(dft_parameters):
+    if (not os.path.exists(_WANNIER_SEEDNAME + '.win')
+        or not os.path.exists(_WANNIER_SEEDNAME + '.inp')):
+        print('*** Wannier input/converter config file not found! '
+              + 'I was looking for {0}.win and {0}.inp ***'.format(_WANNIER_SEEDNAME))
+        mpi.MPI.COMM_WORLD.Abort(1)
+
+    # Runs wannier90 twice:
+    # First preprocessing to write nnkp file, then normal run
+    command = shlex.split(dft_parameters['wannier90_exec'])
+    subprocess.check_call(command[:1] + ['-pp'] + command[1:], shell=False)
+    subprocess.check_call(command, shell=False)
+    # Writes new H(k) to h5 archive
+    #TODO: choose rot_mat_type with general_parameters['set_rot']
+    converter = Wannier90Converter(_WANNIER_SEEDNAME, rot_mat_type='hloc_diag', bloch_basis=True)
+    converter.convert_dft_input()
 
 # Main CSC flow method
 def csc_flow_control(general_parameters, solver_parameters, dft_parameters, advanced_parameters):
@@ -48,15 +81,15 @@ def csc_flow_control(general_parameters, solver_parameters, dft_parameters, adva
     while not vasp.is_lock_file_present():
         time.sleep(1)
 
-    # if GAMMA file already exists, load it by doing an extra DFT iteration
+    # if GAMMA file already exists, load it by doing extra DFT iterations
     if os.path.exists('GAMMA'):
-        iter = -8
+        iter_dft = -8
     else:
-        iter = 0
+        iter_dft = 0
 
     iter_dmft = 0
-    start_dft = timer()
     while iter_dmft < general_parameters['n_iter_dmft']:
+        start_time_dft = timer()
         mpi.report('  Waiting for VASP lock to disappear...')
         mpi.barrier()
         #waiting for vasp to finish
@@ -64,51 +97,38 @@ def csc_flow_control(general_parameters, solver_parameters, dft_parameters, adva
             time.sleep(1)
 
         # check if we should do a dmft iteration now
-        iter += 1
-        if (iter-1) % dft_parameters['n_iter'] != 0 or iter < 0:
+        iter_dft += 1
+        if (iter_dft-1) % dft_parameters['n_iter'] != 0 or iter_dft < 0:
             vasp.reactivate()
             continue
 
-        # run the converter
+        end_time_dft = timer()
+
+        # Runs the converter
         if mpi.is_master_node():
-            end_dft = timer()
+            if dft_parameters['projector_type'] == 'plo':
+                _run_plo_converter(general_parameters)
 
-            # check for plo file for projectors
-            # Warning: if you plan to implement a W90 interface, make sure you
-            # understand what happens in the orbital and what in KS basis
-            if not os.path.exists(general_parameters['plo_cfg']):
-                mpi.report('*** Input PLO config file not found! I was looking for '+str(general_parameters['plo_cfg'])+' ***')
-                mpi.MPI.COMM_WORLD.Abort(1)
-
-            # run plo converter
-            plo_converter.generate_and_output_as_text(general_parameters['plo_cfg'], vasp_dir='./')
-
-            # create h5 archive or build updated H(k)
-            Converter = VaspConverter(filename=general_parameters['seedname'])
-
-            # convert now h5 archive now
-            Converter.convert_dft_input()
-
-            # if wanted store eigenvalues in h5 archive
-            if dft_parameters['store_eigenvals']:
-                toolset.store_dft_eigvals(config_file=general_parameters['plo_cfg'], path_to_h5=general_parameters['seedname']+'.h5', iteration=iter_dmft+1)
+                if dft_parameters['store_eigenvals']:
+                    toolset.store_dft_eigvals(path_to_h5=general_parameters['seedname']+'.h5', iteration=iter_dmft+1)
+            elif dft_parameters['projector_type'] == 'w90':
+                _run_wannier_converter(dft_parameters)
 
         mpi.barrier()
 
         if mpi.is_master_node():
             print('\n' + '='*80)
-            print('DFT cycle took {:10.4f} seconds'.format(end_dft-start_dft))
+            print('DFT cycle took {:10.4f} seconds'.format(end_time_dft-start_time_dft))
             print('calling dmft_cycle')
-            print('DMFT iteration', iter_dmft+1, '/', general_parameters['n_iter_dmft'])
+            print('DMFT iteration {} / {}'.format(iter_dmft+1, general_parameters['n_iter_dmft']))
             print('='*80 + '\n')
 
-        # if first iteration the h5 archive and observables need to be prepared
+        # if first iteration the h5 archive needs to be prepared
         if iter_dmft == 0:
-            observables = dict()
             if mpi.is_master_node():
                 # basic H5 archive checks and setup
                 h5_archive = HDFArchive(general_parameters['seedname']+'.h5', 'a')
-                if not 'DMFT_results' in h5_archive:
+                if 'DMFT_results' not in h5_archive:
                     h5_archive.create_group('DMFT_results')
                 if 'last_iter' in h5_archive['DMFT_results']:
                     prev_iterations = h5_archive['DMFT_results']['iteration_count']
@@ -117,22 +137,18 @@ def csc_flow_control(general_parameters, solver_parameters, dft_parameters, adva
                 else:
                     h5_archive['DMFT_results'].create_group('last_iter')
                     general_parameters['prev_iterations'] = 0
-                if not 'DMFT_input' in h5_archive:
+                if 'DMFT_input' not in h5_archive:
                     h5_archive.create_group('DMFT_input')
                     h5_archive['DMFT_input'].create_group('solver')
 
-                # prepare observable dicts and files, which is stored on the master node
-
-                observables = prep_observables(h5_archive)
-            observables = mpi.bcast(observables)
             general_parameters = mpi.bcast(general_parameters)
 
         if mpi.is_master_node():
-            start_dmft = timer()
+            start_time_dmft = timer()
 
         ############################################################
         # run the dmft_cycle
-        observables = dmft_cycle(general_parameters, solver_parameters, advanced_parameters, observables)
+        dmft_cycle(general_parameters, solver_parameters, advanced_parameters)
         ############################################################
 
         if iter_dmft == 0:
@@ -141,19 +157,15 @@ def csc_flow_control(general_parameters, solver_parameters, dft_parameters, adva
             iter_dmft += general_parameters['n_iter_dmft_per']
 
         if mpi.is_master_node():
-            end_dmft = timer()
+            end_time_dmft = timer()
             print('\n' + '='*80)
-            print('DMFT cycle took {:10.4f} seconds'.format(end_dmft-start_dmft))
+            print('DMFT cycle took {:10.4f} seconds'.format(end_time_dmft-start_time_dmft))
             print('running VASP now')
             print('='*80 + '\n')
         #######
 
         # creates the lock file and Vasp will be unleashed
         vasp.reactivate()
-
-        # start the timer again for the dft loop
-        if mpi.is_master_node():
-            start_dft = timer()
 
     # stop if the maximum number of dmft iterations is reached
     if mpi.is_master_node():

@@ -22,11 +22,13 @@ csc : bool, optional, default=False
             are we doing a CSC calculation?
 plo_cfg : str, optional, default='plo.cfg'
             config file for PLOs for the converter
-h_int_type : int
+h_int_type : string (int as legacy option supported)
             interaction type
-            1 = density-density: currently only implemented for 5 orbitals
-            2 = Kanamori: only defined for either the t2g or the eg subset
-            3 = full Slater: currently not implemented
+            density_density (1): used for full d-shell or eg- or t2g-subset
+            kanamori (2): only phyiscal for the t2g or the eg subset
+            full_slater (3): used for full d-shell or eg- or t2g-subset
+            crpa: use the cRPA matrix as interaction Hamiltonian
+            crpa_density_density: use the density-density terms of the cRPA matrix
 U :  float or comma seperated list of floats
             U values for impurities if only one value is given, the same U is assumed for all impurities
 J :  float or comma seperated list of floats
@@ -58,13 +60,16 @@ magnetic : bool, optional, default=False
             Not implemented for CSC calculations
 magmom : list of float seperated by comma, optional default=[]
             init magnetic moments if magnetic is on. length must be #imps.
-            This will be used as percentage factor for each imp in the initial
-            self energy, pos sign for up (1+fac)*sigma, negative sign for down
-            (1-fac)*sigma channel
+            This will be used as factor for each imp in the initial self
+            energy, with up (or ud for spin-orbit coupling) (1+fac)*sigma, and
+            with down (1-fac)*sigma
 enforce_off_diag : bool, optional, default=False
             enforce off diagonal elements in block structure finder
 h_field : float, optional, default=0.0
             magnetic field
+energy_shift_orbitals : list of floats, optional, default = 'none'
+            orbitals will be shifted by this energy
+            The entries can be python code, to be combined with configparser's interpolation
 sigma_mix : float, optional, default=1.0
             mixing sigma with previous iteration sigma for better convergency. 1.0 means no mixing
 dc : bool, optional, default=True
@@ -73,8 +78,6 @@ calc_energies : bool, optional, default=True
             calc energies explicitly within the dmft loop
 block_threshold : float, optional, default=1e-05
             threshold for finding block structures in the input data (off-diag yes or no)
-spin_names : list of str, optional, default=up,down
-            names for spin channels, usually no need to specifiy this
 load_sigma : bool, optional, default=False
             load a old sigma from h5 file
 path_to_sigma : str, needed if load_sigma is true
@@ -180,6 +183,11 @@ executable : string, default= 'vasp_std'
             command for the DFT / VASP executable
 mpi_env : string, default= 'local'
             selection for mpi env for DFT / VASP in default this will only call VASP as mpirun -np n_cores_dft dft_executable
+projector_type : string, optional, default = 'plo'
+            plo: uses VASP's PLO formalism, requires LOCPROJ in the INCAR
+            w90: uses Wannier90, requires LWANNIER90 in the INCAR
+wannier90_exec : string, default='wannier90.x wannier90'
+            the command to start a single-core wannier run
 
 advanced
 --------
@@ -219,7 +227,10 @@ BOOL_PARSER = lambda b: ConfigParser()._convert_to_boolean(b)
 #              is True, the parameter becomes an optional parameter
 PROPERTIES_PARAMS = {'general': {'seedname': {'converter': lambda s: s.replace(' ', '').split(','), 'used': True},
 
-                                 'h_int_type': {'converter': int, 'valid for': lambda x, _: x in (1, 2, 3), 'used': True},
+                                 'h_int_type': {'valid for': lambda x, _: x in ('density_density', 'kanamori', 'full_slater',
+                                                                                'crpa', 'crpa_density_density',
+                                                                                '1', '2', '3'),
+                                                'used': True},
 
                                  'U': {'converter': lambda s: list(map(float, s.split(','))), 'used': True},
 
@@ -249,7 +260,9 @@ PROPERTIES_PARAMS = {'general': {'seedname': {'converter': lambda s: s.replace('
                                  'n_iter_dmft_per': {'converter': int, 'valid for': lambda x, _: x > 0,
                                                      'used': lambda params: params['general']['csc'], 'default': 2},
 
-                                 'plo_cfg': {'used': lambda params: params['general']['csc'], 'default': 'plo.cfg'},
+                                 'plo_cfg': {'used': lambda params: (params['general']['csc']
+                                                                     and params['dft']['projector_type'] == 'plo'),
+                                             'default': 'plo.cfg'},
 
                                  'jobname': {'converter': lambda s: s.replace(' ', '').split(','),
                                              'valid for': lambda x, params: len(x) == len(params['general']['seedname']),
@@ -261,12 +274,14 @@ PROPERTIES_PARAMS = {'general': {'seedname': {'converter': lambda s: s.replace('
                                  'magnetic': {'converter': BOOL_PARSER,
                                               'used': lambda params: not params['general']['csc'], 'default': False},
 
-                                 # TODO: add check of length if possible
                                  'magmom': {'converter': lambda s: list(map(float, s.split(','))),
                                             'used': lambda params: not params['general']['csc'] and params['general']['magnetic'],
                                             'default': []},
 
                                  'h_field': {'converter': float, 'used': True, 'default': 0.0},
+
+                                 'energy_shift_orbitals': {'converter': lambda s: [float(eval(x)) for x in s.split(',')],
+                                                           'used': lambda params: not params['general']['csc'], 'default': 'none'},
 
                                  'afm_order': {'converter': BOOL_PARSER,
                                                'used': lambda params: not params['general']['csc'] and params['general']['magnetic'],
@@ -281,9 +296,6 @@ PROPERTIES_PARAMS = {'general': {'seedname': {'converter': lambda s: s.replace('
                                                      'used': True, 'default': 1e-5},
 
                                  'enforce_off_diag': {'converter': BOOL_PARSER, 'used': True, 'default': False},
-
-                                 'spin_names': {'converter': lambda s: s.replace(' ', '').split(','),
-                                                'used': True, 'default': ['up', 'down']},
 
                                  'load_sigma': {'converter': BOOL_PARSER, 'used': True, 'default': False},
 
@@ -351,10 +363,19 @@ PROPERTIES_PARAMS = {'general': {'seedname': {'converter': lambda s: s.replace('
                              'executable': {'used': lambda params: params['general']['csc'], 'default': 'vasp_std'},
 
                              'store_eigenvals': {'converter': BOOL_PARSER,
-                                                 'used': lambda params: params['general']['csc'], 'default': False},
+                                                 'used': lambda params: (params['general']['csc']
+                                                                         and params['dft']['projector_type'] == 'plo'),
+                                                 'default': False},
 
                              'mpi_env': {'valid for': lambda x, _: x in ('local', 'rusty', 'daint'),
                                          'used': lambda params: params['general']['csc'], 'default': 'local'},
+
+                             'projector_type': {'valid for': lambda x, _: x in ('plo', 'w90'),
+                                                'used': lambda params: params['general']['csc'], 'default': 'plo'},
+
+                             'wannier90_exec': {'used': lambda params: (params['general']['csc']
+                                                                        and params['dft']['projector_type'] == 'w90'),
+                                                'default': 'wannier90.x wannier90'},
                             },
                      'solver': {'length_cycle': {'converter': int, 'valid for': lambda x, _: x > 0, 'used': True},
 
@@ -423,6 +444,7 @@ PROPERTIES_PARAMS = {'general': {'seedname': {'converter': lambda s: s.replace('
 
                                   'dc_fixed_occ': {'converter': lambda s: list(map(float, s.split(','))),
                                                    'used': True, 'default': 'none'},
+
                                   'dc_nominal': {'converter': BOOL_PARSER, 'used': True, 'default': False},
 
                                   'dc_U': {'converter': lambda s: list(map(float, s.split(','))),
@@ -816,6 +838,14 @@ def read_config(config_file):
                 invalid_error_string += '\n- Section "{}": '.format(section_name) + ', '.join(section_parameters)
         raise ValueError('The following parameters are not valid:'
                          + invalid_error_string)
+
+    # Legacy options for interaction Hamiltonian
+    if parameters['general']['h_int_type'] in ('1', '2', '3'):
+        print('Warning: Specifying h_int_type with integers is deprecated, use string name.')
+        parameters['general']['h_int_type'] = {'1': 'density_density',
+                                               '2': 'kanamori',
+                                               '3': 'full_slater'
+                                               }[parameters['general']['h_int_type']]
 
 
     # Workarounds for some parameters

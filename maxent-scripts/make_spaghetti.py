@@ -20,7 +20,7 @@ def _read_h5(external_path, iteration=None):
     h5_internal_path = 'DMFT_results/' + ('last_iter' if iteration is None else 'it_{}'.format(iteration))
 
     with HDFArchive(external_path, 'r') as archive:
-        impurity_paths = filter(lambda key: 'Sigma_w_' in key, archive[h5_internal_path].keys())
+        impurity_paths = [key for key in archive[h5_internal_path].keys() if 'Sigma_w_' in key]
         # Sorts impurity paths by their indices, not sure if necessary
         impurity_indices = [int(s[s.rfind('_')+1:]) for s in impurity_paths]
         impurity_paths = [impurity_paths[i] for i in np.argsort(impurity_indices)]
@@ -29,7 +29,11 @@ def _read_h5(external_path, iteration=None):
 
         dc_potential = archive[h5_internal_path]['DC_pot']
         dc_energy = archive[h5_internal_path]['DC_energ']
-        chemical_potential = archive[h5_internal_path]['chemical_potential']
+        if 'chemical_potential_post' in archive[h5_internal_path]:
+            chemical_potential = archive[h5_internal_path]['chemical_potential_post']
+        else:
+            # Old name for chemical_potential_post
+            chemical_potential = archive[h5_internal_path]['chemical_potential']
 
     return sigma_w, dc_potential, dc_energy, chemical_potential
 
@@ -50,7 +54,6 @@ def _get_diagonal_sigma(sigma_w):
     is_already_diagonal = True
     for i in range(len(sigma_w)):
         for key, block in sigma_w[i]:
-            print(block.data.shape)
             if block.data.shape[1] > 1:
                 is_already_diagonal = False
                 break
@@ -119,10 +122,10 @@ def main(external_path, iteration=None):
                                     dc_potential, dc_energy, sigma_w)
     mesh = np.array([x.real for x in sigma_w[0].mesh])
 
-    alatt_w, aimp_w, aimp_w_per_orb = sum_k.dos_wannier_basis(save_to_file=False)
+    alatt_w, aimp_w, aimp_w_per_orb = sum_k.dos_wannier_basis(save_to_file=False, broadening=0)
     print('Calculated the spectral functions. Starting with spaghetti now.')
 
-    alatt_k_w = sum_k.spaghettis(save_to_file=False)
+    alatt_k_w = sum_k.spaghettis(save_to_file=False, broadening=0)
     _write_dos_and_spaghetti_to_h5(mesh, alatt_w, aimp_w, aimp_w_per_orb, alatt_k_w,
                                    external_path, iteration)
 

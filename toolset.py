@@ -8,17 +8,17 @@
 # determine_block_structure
 # load_sigma_from_h5
 
-#import errno
 import numpy as np
 
 # triqs
-import triqs.utility.mpi as mpi
 from h5 import HDFArchive
 from triqs_dft_tools.converters.plovasp.vaspio import VaspData
+from triqs.operators.util.observables import S_op
 from triqs.gf import BlockGf, GfImFreq
 from triqs.gf.tools import fit_legendre
+import triqs.utility.mpi as mpi
 
-def store_dft_eigvals(config_file, path_to_h5, iteration):
+def store_dft_eigvals(path_to_h5, iteration):
     """
     save the eigenvalues from LOCPROJ file to calc directory
     """
@@ -50,6 +50,7 @@ def get_dft_energy():
         dft_energy = 0.0
     return dft_energy
 
+# TODO: remove unused get_dft_mu?
 def get_dft_mu():
     """
     Reads fermi energy from the first line of LOCPROJ.
@@ -94,11 +95,10 @@ def check_convergence(sum_k, general_parameters, observables):
     std_dev = np.empty(sum_k.n_inequiv_shells)
 
     for icrsh in range(sum_k.n_inequiv_shells):
-        avg_occ[icrsh] = np.mean(np.array(observables['imp_occ'][icrsh]['up'][-iterations:])
-                                 + np.array(observables['imp_occ'][icrsh]['down'][-iterations:]))
-
-        std_dev[icrsh] = np.std(np.array(observables['imp_occ'][icrsh]['up'][-iterations:])
-                                + np.array(observables['imp_occ'][icrsh]['down'][-iterations:]))
+        imp_occ = np.sum([observables['imp_occ'][icrsh][spin][-iterations:]
+                          for spin in sum_k.spin_block_names[sum_k.SO]], axis=0)
+        avg_occ[icrsh] = np.mean(imp_occ)
+        std_dev[icrsh] = np.std(imp_occ)
 
         print('Average occupation of impurity {}: {:10.5f}'.format(icrsh, avg_occ[icrsh]))
         print('Standard deviation of impurity {}: {:10.5f}'.format(icrsh, std_dev[icrsh]))
@@ -121,8 +121,6 @@ def determine_block_structure(sum_k, general_parameters):
     __Returns:__
     sum_k : SumK Object instances
         updated sum_k Object
-    shell_multiplicity : list of int
-        list that contains the shell_multiplicity of each ineq impurity
     """
     mpi.report('\n *** determination of block structure ***')
 
@@ -132,7 +130,7 @@ def determine_block_structure(sum_k, general_parameters):
     dens_mat = sum_k.density_matrix(method='using_gf', beta=general_parameters['beta'])
 
     # if we want to do a magnetic calculation we need to lift up/down degeneracy
-    if not general_parameters['csc'] and general_parameters['magnetic']:
+    if not general_parameters['csc'] and general_parameters['magnetic'] and sum_k.SO == 0:
         mpi.report('magnetic calculation: removing the spin degeneracy from the block structure')
         for i, elem in enumerate(dens_mat):
             for key, value in elem.items():
@@ -153,25 +151,15 @@ def determine_block_structure(sum_k, general_parameters):
     # this enforces to use the full corr subspace matrix
     if general_parameters['enforce_off_diag']:
         mpi.report('enforcing off-diagonal elements in block structure finder')
-        for i, elem in enumerate(dens_mat):
-            for key, value in elem.items():
-                for a in range(len(value[:, 0])):
-                    for b in range(len(value[0, :])):
-                        if a != b:
-                            dens_mat[i][key][a, b] += 0.05
+        for dens_mat_per_imp in dens_mat:
+            for dens_mat_per_block in dens_mat_per_imp.values():
+                dens_mat_per_block += 2 * general_parameters['block_threshold']
 
     mpi.report('using 1-particle density matrix and Hloc (atomic levels) to '
                'determine the block structure')
     sum_k.analyse_block_structure(dm=dens_mat, threshold=general_parameters['block_threshold'])
 
-    # Determination of shell_multiplicity
-    if mpi.is_master_node():
-        shell_multiplicity = [sum_k.corr_to_inequiv.count(icrsh) for icrsh in range(sum_k.n_inequiv_shells)]
-    else:
-        shell_multiplicity = None
-    shell_multiplicity = mpi.bcast(shell_multiplicity)
-
-    return sum_k, shell_multiplicity
+    return sum_k
 
 def print_block_sym(sum_k):
     # Summary of block structure finder and determination of shell_multiplicity
@@ -282,6 +270,108 @@ def sumk_sigma_to_solver_struct(sum_k, start_sigma):
     return Sigma_inequiv
 
 
+def _round_to_int(data):
+    return (np.array(data) + .5).astype(int)
+
+
+def load_crpa_interaction_matrix(sum_k, filename='UIJKL'):
+    """
+    Loads VASP cRPA data to use as an interaction Hamiltonian.
+    """
+    # Loads data from VASP cRPA file
+    data = np.loadtxt(filename, unpack=True)
+    u_matrix_four_indices = np.zeros(_round_to_int(np.max(data[:4], axis=1)), dtype=complex)
+    for entry in data.T:
+        # VASP switches the order of the indices, ijkl -> ikjl
+        i, k, j, l = _round_to_int(entry[:4])-1
+        u_matrix_four_indices[i, j, k, l] = entry[4] + 1j * entry[5]
+
+    # Slices up the four index U-matrix, separating shells
+    u_matrix_four_indices_per_shell = [None] * sum_k.n_inequiv_shells
+    first_index_shell = 0
+    for ish in range(sum_k.n_corr_shells):
+        n_orb = sum_k.corr_shells[ish]['dim']
+        icrsh = sum_k.corr_to_inequiv[ish]
+        u_matrix_temp = u_matrix_four_indices[first_index_shell:first_index_shell+n_orb,
+                                              first_index_shell:first_index_shell+n_orb,
+                                              first_index_shell:first_index_shell+n_orb,
+                                              first_index_shell:first_index_shell+n_orb]
+
+        if ish == icrsh:
+            u_matrix_four_indices_per_shell[icrsh] = u_matrix_temp
+        elif not np.allclose(u_matrix_four_indices_per_shell[icrsh], u_matrix_temp, atol=1e-6, rtol=0):
+            # TODO: for some reason, some entries in the matrices differ by a sign. Check that
+            print(np.allclose(np.abs(u_matrix_four_indices_per_shell[icrsh]), np.abs(u_matrix_temp),
+                              atol=1e-6, rtol=0))
+            print('Warning: cRPA matrix for impurity {} '.format(icrsh)
+                  + 'differs for shells {} and {}'.format(sum_k.inequiv_to_corr[icrsh], ish))
+
+        first_index_shell += n_orb
+
+    if not np.allclose(u_matrix_four_indices.shape, first_index_shell):
+        print('Warning: different number of orbitals in cRPA matrix than in calculation.')
+
+    return u_matrix_four_indices_per_shell
+
+
+def adapt_U_2index_for_SO(Umat, Upmat):
+    """
+    Changes the two-index U matrices such that for a system consisting of a
+    single block 'ud' with the entries (1, up), (1, down), (2, up), (2, down),
+    ... the matrices are consistent with the case without spin-orbit coupling.
+
+    Parameters
+    ----------
+    Umat : numpy array
+        The two-index interaction matrix for parallel spins without SO.
+    Upmat : numpy array
+        The two-index interaction matrix for antiparallel spins without SO.
+
+    Returns
+    -------
+    Umat_SO : numpy array
+        The two-index interaction matrix for parallel spins. Because in SO all
+        entries have nominal spin 'ud', this matrix now contains the original
+        Umat and Upmat.
+    Upmat_SO : numpy array
+        The two-index interaction matrix for antiparallel spins. Unused because
+        in SO, all spins have the same nominal spin 'ud'.
+    """
+
+    Umat_SO = np.zeros(np.array(Umat.shape)*2, dtype=Umat.dtype)
+    Umat_SO[::2, ::2] = Umat_SO[1::2, 1::2] = Umat
+    Umat_SO[::2, 1::2] = Umat_SO[1::2, ::2] = Upmat
+    Upmat_SO = None
+
+    return Umat_SO, Upmat_SO
+
+
+def adapt_U_4index_for_SO(Umat_full):
+    """
+    Changes the four-index U matrix such that for a system consisting of a
+    single block 'ud' with the entries (1, up), (1, down), (2, up), (2, down),
+    ... the matrix is consistent with the case without spin-orbit coupling.
+    This can be derived directly from the definition of the Slater Hamiltonian.
+
+    Parameters
+    ----------
+    Umat_full : numpy array
+       The four-index interaction matrix without SO.
+
+    Returns
+    -------
+    Umat_full_SO : numpy array
+        The four-index interaction matrix with SO. For a matrix U_ijkl, the
+        indices i, k correspond to spin sigma, and indices j, l to sigma'.
+    """
+
+    Umat_full_SO = np.zeros(np.array(Umat_full.shape)*2, dtype=Umat_full.dtype)
+    for spin, spin_prime in ((0, 0), (0, 1), (1, 0), (1, 1)):
+        Umat_full_SO[spin::2, spin_prime::2, spin::2, spin_prime::2] = Umat_full
+
+    return Umat_full_SO
+
+
 def legendre_filter(G_tau, order=100, G_l_cut=1e-19):
     """ Filter binned imaginary time Green's function
     using a Legendre filter of given order and coefficient threshold.
@@ -339,7 +429,7 @@ def legendre_filter(G_tau, order=100, G_l_cut=1e-19):
     # final run with automatically determined number of coefficients or given order
     l_g_l = []
 
-    for b, g in G_tau:
+    for _, g in G_tau:
 
         g_l = fit_legendre(g, order=order)
         g_l.data[:] *= (np.abs(g_l.data) > G_l_cut)
@@ -368,8 +458,6 @@ def chi_SzSz_setup(sum_k, general_parameters, solver_parameters):
     Sz_list : list of S_op operators to measure per impurity
     """
 
-    from triqs.operators.util.observables import S_op
-
     mpi.report('setting up Chi(Sz,Sz(tau)) measurement')
 
     Sz_list = [None] * sum_k.n_inequiv_shells
@@ -379,7 +467,7 @@ def chi_SzSz_setup(sum_k, general_parameters, solver_parameters):
         orb_names = list(range(n_orb))
 
         Sz_list[icrsh] = S_op('z',
-                              spin_names=general_parameters['spin_names'],
+                              spin_names=sum_k.spin_block_names[sum_k.SO],
                               orb_names=orb_names,
                               map_operator_structure=sum_k.sumk_to_solver[icrsh])
 
