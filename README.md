@@ -1,4 +1,11 @@
-![logo_soliDMFT](logo_soliDMFT.png)
+# solid_DMFT moved to a new home [on github: solid_dmft](github.com/flatironinstitute/solid_dmft)
+
+## !!! this repo is out-dated, please see github.com/flatironinstitute/solid_dmft 
+
+
+
+---
+
 
 This program allows to perform DFT+DMFT ''one-shot'' and CSC
 calculations from h5 archives or VASP input files for multiband systems using
