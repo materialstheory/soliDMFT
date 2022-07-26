@@ -1,8 +1,6 @@
-# solid_DMFT moved to a new home [on github: solid_dmft](github.com/flatironinstitute/solid_dmft)
+# soliDMFT moved to a new home on github: [solid_dmft](github.com/TRIQS/solid_dmft)
 
-## !!! this repo is out-dated, please see github.com/flatironinstitute/solid_dmft 
-
-
+## !!! this repo is out-dated, please follow the link above
 
 ---
 
